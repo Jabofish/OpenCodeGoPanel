@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenCode Usage</title>
+  <link rel="stylesheet" href="styles/main.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Title Bar -->
+    <div id="titlebar">
+      <span id="app-title">OpenCode Usage</span>
+      <span id="window-ctls">
+        <span id="btn-pin" class="dot dot-pin" title="Pin"></span>
+        <span id="btn-min" class="dot dot-min" title="Hide"></span>
+        <span id="btn-close" class="dot dot-close" title="Close"></span>
+      </span>
+    </div>
+
+    <!-- Tab Bar -->
+    <nav id="tab-bar">
+      <button class="tab active" data-tab="usage">Usage</button>
+      <button class="tab" data-tab="models">Models</button>
+      <button class="tab" data-tab="trends">Trends</button>
+    </nav>
+
+    <!-- Panel Content -->
+    <main id="panel-content">
+      <!-- Usage Tab -->
+      <section id="tab-usage" class="tab-panel active"></section>
+      <!-- Models Tab -->
+      <section id="tab-models" class="tab-panel"></section>
+      <!-- Trends Tab -->
+      <section id="tab-trends" class="tab-panel"></section>
+    </main>
+
+    <!-- Footer -->
+    <footer id="panel-footer">
+      <span id="footer-time">Loading...</span>
+      <span id="footer-actions">
+        <button id="btn-refresh" class="footer-btn">Refresh</button>
+        <button id="btn-hide" class="footer-btn">Hide</button>
+      </span>
+    </footer>
+  </div>
+
+  <script src="vendor/chart.umd.js"></script>
+  <script type="module" src="js/format.js"></script>
+  <script type="module" src="js/usage.js"></script>
+  <script type="module" src="js/models.js"></script>
+  <script type="module" src="js/trends.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

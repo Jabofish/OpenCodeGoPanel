@@ -1,0 +1,13 @@
+{
+  "identifier": "login-capability",
+  "windows": ["login"],
+  "remote": {
+    "urls": ["https://opencode.ai/*"]
+  },
+  "permissions": [
+    "core:default",
+    "core:window:allow-close",
+    "core:event:default",
+    "allow-extract-cookies-from-webview"
+  ]
+}
