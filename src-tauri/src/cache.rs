@@ -25,7 +25,10 @@ impl AppCache {
 
     /// Get current snapshot (non-blocking read).
     pub fn get(&self) -> AppDataSnapshot {
-        self.data.read().unwrap().clone()
+        self.data
+            .read()
+            .map(|reader| reader.clone())
+            .unwrap_or_else(|_| AppDataSnapshot::empty())
     }
 
     /// Update the cached snapshot.

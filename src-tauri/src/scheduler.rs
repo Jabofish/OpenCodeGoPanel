@@ -52,7 +52,9 @@ impl RefreshScheduler {
 
     /// Set the AppHandle for notification support (call during setup)
     pub fn set_app_handle(&self, handle: tauri::AppHandle) {
-        *self.app_handle.lock().unwrap() = Some(handle);
+        if let Ok(mut app_handle) = self.app_handle.lock() {
+            *app_handle = Some(handle);
+        }
     }
 
     /// Set the usage alert threshold
@@ -431,7 +433,11 @@ impl RefreshScheduler {
             return;
         }
 
-        let app_handle = self.app_handle.lock().unwrap().clone();
+        let app_handle = self
+            .app_handle
+            .lock()
+            .map(|handle| handle.clone())
+            .unwrap_or(None);
 
         Self::do_refresh(
             self.client.clone(),

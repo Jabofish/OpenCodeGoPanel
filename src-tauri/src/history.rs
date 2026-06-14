@@ -68,11 +68,14 @@ impl HistoryStore {
 
         self.data
             .read()
-            .unwrap()
-            .iter()
-            .filter(|e| e.date >= cutoff)
-            .cloned()
-            .collect()
+            .map(|reader| {
+                reader
+                    .iter()
+                    .filter(|e| e.date >= cutoff)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn persist_locked(&self, entries: &[HistoryEntry]) {
