@@ -228,13 +228,32 @@ pub async fn set_hotkey(
         return Err("Hotkey key must be a single letter A-Z".into());
     }
     let code = match key_char.as_str() {
-        "A" => Code::KeyA, "B" => Code::KeyB, "C" => Code::KeyC, "D" => Code::KeyD,
-        "E" => Code::KeyE, "F" => Code::KeyF, "G" => Code::KeyG, "H" => Code::KeyH,
-        "I" => Code::KeyI, "J" => Code::KeyJ, "K" => Code::KeyK, "L" => Code::KeyL,
-        "M" => Code::KeyM, "N" => Code::KeyN, "O" => Code::KeyO, "P" => Code::KeyP,
-        "Q" => Code::KeyQ, "R" => Code::KeyR, "S" => Code::KeyS, "T" => Code::KeyT,
-        "U" => Code::KeyU, "V" => Code::KeyV, "W" => Code::KeyW, "X" => Code::KeyX,
-        "Y" => Code::KeyY, "Z" => Code::KeyZ,
+        "A" => Code::KeyA,
+        "B" => Code::KeyB,
+        "C" => Code::KeyC,
+        "D" => Code::KeyD,
+        "E" => Code::KeyE,
+        "F" => Code::KeyF,
+        "G" => Code::KeyG,
+        "H" => Code::KeyH,
+        "I" => Code::KeyI,
+        "J" => Code::KeyJ,
+        "K" => Code::KeyK,
+        "L" => Code::KeyL,
+        "M" => Code::KeyM,
+        "N" => Code::KeyN,
+        "O" => Code::KeyO,
+        "P" => Code::KeyP,
+        "Q" => Code::KeyQ,
+        "R" => Code::KeyR,
+        "S" => Code::KeyS,
+        "T" => Code::KeyT,
+        "U" => Code::KeyU,
+        "V" => Code::KeyV,
+        "W" => Code::KeyW,
+        "X" => Code::KeyX,
+        "Y" => Code::KeyY,
+        "Z" => Code::KeyZ,
         _ => return Err("Unsupported key".into()),
     };
 
@@ -286,8 +305,8 @@ pub async fn switch_workspace(
     cache: tauri::State<'_, Arc<AppCache>>,
     workspace_id: String,
 ) -> Result<(), String> {
-    // Try to update auth file (workspace may not be in auth if discovered from HTML)
-    let _ = auth.switch_workspace(&workspace_id);
+    // Persist the active workspace before refreshing; the scheduler reads it from auth.
+    auth.switch_workspace(&workspace_id)?;
 
     // Update the workspace_id in the cache so the scheduler uses the new one
     cache.update_with(|snapshot| {

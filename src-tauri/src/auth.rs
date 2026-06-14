@@ -142,8 +142,25 @@ impl AuthStore {
     /// Switch active workspace.
     pub fn switch_workspace(&self, workspace_id: &str) -> Result<(), String> {
         let mut auth = self.load_auth().ok_or("No auth data found")?;
-        if !auth.workspaces.iter().any(|w| w.workspace_id == workspace_id) {
-            return Err("Workspace not found".into());
+        if !auth
+            .workspaces
+            .iter()
+            .any(|w| w.workspace_id == workspace_id)
+        {
+            let active = auth
+                .workspaces
+                .iter()
+                .find(|w| w.workspace_id == auth.active_workspace)
+                .or_else(|| auth.workspaces.first())
+                .cloned()
+                .ok_or("No workspace credentials found")?;
+
+            auth.workspaces.push(WorkspaceCredentials {
+                workspace_id: workspace_id.to_string(),
+                cookies: active.cookies,
+                display_name: workspace_id.to_string(),
+                added_at: chrono::Utc::now().to_rfc3339(),
+            });
         }
         auth.active_workspace = workspace_id.to_string();
         auth.saved_at = chrono::Utc::now().to_rfc3339();

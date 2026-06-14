@@ -120,9 +120,19 @@ impl RefreshScheduler {
             Ok((u, workspaces)) => {
                 println!(
                     "[Scheduler] Usage OK: rolling={}%, weekly={}%, monthly={}%, workspaces={}",
-                    u.rolling.usage_percent, u.weekly.usage_percent, u.monthly.usage_percent, workspaces.len()
+                    u.rolling.usage_percent,
+                    u.weekly.usage_percent,
+                    u.monthly.usage_percent,
+                    workspaces.len()
                 );
                 cache.update_with(|snapshot| {
+                    if snapshot.workspace_id != workspace_id {
+                        println!(
+                            "[Scheduler] Ignoring stale usage result for {}",
+                            workspace_id
+                        );
+                        return;
+                    }
                     Self::prepare_workspace(snapshot, &workspace_id);
                     snapshot.usage = u.clone();
                     snapshot.workspaces = workspaces;
@@ -141,11 +151,16 @@ impl RefreshScheduler {
                                 "Rolling usage reached {}% (threshold: {}%)",
                                 u.rolling.usage_percent, thresh
                             );
-                            let _ = handle.notification().builder()
+                            let _ = handle
+                                .notification()
+                                .builder()
                                 .title(title)
                                 .body(body)
                                 .show();
-                            println!("[Scheduler] Threshold alert sent: {}%", u.rolling.usage_percent);
+                            println!(
+                                "[Scheduler] Threshold alert sent: {}%",
+                                u.rolling.usage_percent
+                            );
                         }
                     }
                 } else if thresh >= 50 && u.rolling.usage_percent < thresh {
@@ -164,6 +179,13 @@ impl RefreshScheduler {
                 // Don't clear existing usage data for non-auth errors
                 // (workspace may not have a Go plan — let frontend show info message)
                 cache.update_with(|snapshot| {
+                    if snapshot.workspace_id != workspace_id {
+                        println!(
+                            "[Scheduler] Ignoring stale usage error for {}",
+                            workspace_id
+                        );
+                        return;
+                    }
                     if snapshot.error.is_none() {
                         snapshot.error = Some(e);
                     }
@@ -312,6 +334,13 @@ impl RefreshScheduler {
         let costs = client.fetch_monthly_costs(&cookies, &workspace_id).await?;
         println!("[Scheduler] Monthly costs OK: {} entries", costs.len());
         cache.update_with(|snapshot| {
+            if snapshot.workspace_id != workspace_id {
+                println!(
+                    "[Scheduler] Ignoring stale monthly costs for {}",
+                    workspace_id
+                );
+                return;
+            }
             Self::prepare_workspace(snapshot, &workspace_id);
             snapshot.daily_costs = costs;
             snapshot.last_updated = Utc::now().to_rfc3339();
@@ -325,6 +354,13 @@ impl RefreshScheduler {
         }
 
         cache.update_with(|snapshot| {
+            if snapshot.workspace_id != workspace_id {
+                println!(
+                    "[Scheduler] Ignoring stale usage records for {}",
+                    workspace_id
+                );
+                return;
+            }
             Self::prepare_workspace(snapshot, workspace_id);
             Self::merge_usage_records(&mut snapshot.usage_records, incoming);
             snapshot.model_calls = OpenCodeClient::agg_stats_from_records(&snapshot.usage_records);
