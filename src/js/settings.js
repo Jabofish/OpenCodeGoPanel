@@ -12,6 +12,7 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned) {
     '<div class="settings-group">' +
       '<div class="settings-title">Window</div>' +
       buildToggle('setting-pin', 'Always on top', isPinned) +
+      buildToggle('setting-mini-badge', 'Mini badge mode', settings.miniBadgeMode) +
       buildStatus('Taskbar icon', taskbarStatus) +
       buildAction('setting-minimize', 'Minimize to taskbar') +
       buildAction('setting-hide-to-tray', 'Hide to tray') +
@@ -38,13 +39,14 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned) {
     '<div class="settings-group">' +
       '<div class="settings-title">Account</div>' +
       buildStatus('Workspace', escapeHtml(workspace)) +
-      buildAction('setting-login', 'Log in') +
+      buildAction('setting-login', 'Log in') + 
       buildAction('setting-clear-auth', 'Clear login') +
     '</div>';
 
   bindToggle('setting-pin', (value) => actions.setPinned(value));
   bindToggle('setting-auto-refresh', (value) => actions.setAutoRefresh(value));
   bindToggle('setting-compact', (value) => actions.setCompactMode(value));
+  bindToggle('setting-mini-badge', (value) => actions.setMiniBadgeMode(value));
   bindAction('setting-refresh', actions.refresh);
   bindAction('setting-clear-cache', actions.clearCache);
   bindAction('setting-login', actions.login);

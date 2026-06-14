@@ -17,6 +17,13 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+}
+
 body {
   background: transparent;
   color: var(--text-body);
@@ -40,6 +47,117 @@ body {
 }
 
 body.compact-mode #app { border-radius: 20px; }
+
+html.mini-badge-mode:not(.expanded),
+html.mini-badge-mode:not(.expanded) body {
+  width: 60px;
+  height: 60px;
+  min-width: 60px;
+  min-height: 60px;
+  max-width: 60px;
+  max-height: 60px;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+body.mini-badge-mode {
+  min-width: 60px;
+  min-height: 60px;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+body.mini-badge-mode:not(.expanded) #app {
+  position: fixed;
+  inset: 0 auto auto 0;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  border: 0 !important;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  background: transparent !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+body.mini-badge-mode.expanded #app {
+  display: flex !important;
+  width: 100vw;
+  height: 100vh;
+}
+
+#mini-badge {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: var(--bg-shell);
+  border: 2px solid var(--border-strong);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.42);
+  -webkit-app-region: drag;
+  cursor: move;
+  z-index: 9999;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+body.mini-badge-mode:not(.expanded) #mini-badge {
+  display: flex;
+}
+
+body.mini-badge-mode.expanded #mini-badge {
+  display: none !important;
+}
+
+#mini-badge:hover {
+  transform: scale(1.05);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
+  border-color: rgba(130, 162, 255, 0.3);
+}
+
+#mini-badge-percent {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--color-rolling);
+  line-height: 1;
+}
+
+#mini-badge-label {
+  font-size: 8px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+#mini-badge-indicator {
+  position: absolute;
+  bottom: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-weekly);
+  box-shadow: 0 0 8px rgba(95, 207, 151, 0.5);
+}
+
+#mini-badge-indicator.warning {
+  background: var(--color-monthly);
+  box-shadow: 0 0 8px rgba(233, 174, 85, 0.5);
+}
+
+#mini-badge-indicator.danger {
+  background: #e06170;
+  box-shadow: 0 0 8px rgba(224, 97, 112, 0.5);
+}
 
 #titlebar {
   display: flex;

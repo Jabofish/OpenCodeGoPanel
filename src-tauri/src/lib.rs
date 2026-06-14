@@ -73,6 +73,7 @@ pub fn run() {
             commands::clear_auth,
             commands::clear_cache,
             commands::hide_to_tray,
+            commands::set_mini_badge_window,
             commands::open_login_window,
             commands::extract_cookies_from_webview,
             commands::get_history,

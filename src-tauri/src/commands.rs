@@ -6,7 +6,7 @@ use crate::scheduler::RefreshScheduler;
 use crate::HotkeyState;
 use serde::Deserialize;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, LogicalSize, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 
 #[tauri::command]
@@ -71,6 +71,42 @@ pub async fn hide_to_tray(
     if let Some(window) = app.get_webview_window("main") {
         window.hide().map_err(|e| e.to_string())?;
     }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_mini_badge_window(app: AppHandle, expanded: bool) -> Result<(), String> {
+    const MINI_BADGE_SIZE: LogicalSize<f64> = LogicalSize {
+        width: 60.0,
+        height: 60.0,
+    };
+    const PANEL_MIN_SIZE: LogicalSize<f64> = LogicalSize {
+        width: 280.0,
+        height: 320.0,
+    };
+    const PANEL_SIZE: LogicalSize<f64> = LogicalSize {
+        width: 320.0,
+        height: 480.0,
+    };
+
+    let Some(window) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+
+    if expanded {
+        window.set_max_size(None::<LogicalSize<f64>>).map_err(|e| e.to_string())?;
+        window.set_min_size(Some(PANEL_MIN_SIZE)).map_err(|e| e.to_string())?;
+        window.set_resizable(true).map_err(|e| e.to_string())?;
+        window.set_shadow(false).map_err(|e| e.to_string())?;
+        window.set_size(PANEL_SIZE).map_err(|e| e.to_string())?;
+    } else {
+        window.set_resizable(false).map_err(|e| e.to_string())?;
+        window.set_shadow(false).map_err(|e| e.to_string())?;
+        window.set_min_size(Some(MINI_BADGE_SIZE)).map_err(|e| e.to_string())?;
+        window.set_size(MINI_BADGE_SIZE).map_err(|e| e.to_string())?;
+        window.set_max_size(Some(MINI_BADGE_SIZE)).map_err(|e| e.to_string())?;
+    }
+
     Ok(())
 }
 

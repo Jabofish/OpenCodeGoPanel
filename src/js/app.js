@@ -31,10 +31,15 @@ let snapshotTimer = null;
 let latestSnapshot = null;
 let settings = loadSettings();
 
+const MINI_BADGE_SIZE = { width: 60, height: 60 };
+const PANEL_MIN_SIZE = { width: 280, height: 320 };
+const PANEL_SIZE = { width: 320, height: 480 };
+
 const settingActions = {
   setPinned: async (value) => setPinned(value),
   setAutoRefresh: (value) => updateSettings({ autoRefresh: value }),
   setCompactMode: (value) => updateSettings({ compactMode: value }),
+  setMiniBadgeMode: (value) => updateSettings({ miniBadgeMode: value }),
   setBudget: (value) => updateSettings({ monthlyBudget: value }),
   setHotkey: async (value) => {
     try {
@@ -70,13 +75,14 @@ function loadSettings() {
     return {
       autoRefresh: true,
       compactMode: true,
+      miniBadgeMode: false,
       monthlyBudget: 6000,
       hotkey: 'Ctrl+Shift+U',
       usageThreshold: 80,
       ...JSON.parse(localStorage.getItem('ocp-settings') || '{}'),
     };
   } catch (_) {
-    return { autoRefresh: true, compactMode: true, monthlyBudget: 6000, hotkey: 'Ctrl+Shift+U', usageThreshold: 80 };
+    return { autoRefresh: true, compactMode: true, miniBadgeMode: false, monthlyBudget: 6000, hotkey: 'Ctrl+Shift+U', usageThreshold: 80 };
   }
 }
 
@@ -92,7 +98,133 @@ function updateSettings(next) {
 }
 
 function applyUiSettings() {
+  document.documentElement.classList.toggle('mini-badge-mode', settings.miniBadgeMode);
   document.body.classList.toggle('compact-mode', settings.compactMode);
+  document.body.classList.toggle('mini-badge-mode', settings.miniBadgeMode);
+
+  document.documentElement.classList.remove('expanded');
+  document.body.classList.remove('expanded');
+
+  resizeWindowForMiniBadge(false);
+}
+
+function setMiniBadgeExpanded(expanded) {
+  document.documentElement.classList.toggle('expanded', expanded);
+  document.body.classList.toggle('expanded', expanded);
+}
+
+async function resizeWindowForMiniBadge(expanded) {
+  if (invoke) {
+    try {
+      await invoke('set_mini_badge_window', { expanded });
+      return;
+    } catch (e) {
+      console.warn('[MiniBadge] Native resize command failed, falling back:', e);
+    }
+  }
+
+  if (!getCurrentWindow) return;
+
+  try {
+    const win = getCurrentWindow();
+
+    if (settings.miniBadgeMode && !expanded) {
+      await win.setResizable?.(false);
+      await win.setShadow?.(false);
+      await win.setMinSize(MINI_BADGE_SIZE);
+      await win.setSize(MINI_BADGE_SIZE);
+      await win.setMaxSize(MINI_BADGE_SIZE);
+      return;
+    }
+
+    await win.setMaxSize(null);
+    await win.setMinSize(PANEL_MIN_SIZE);
+    await win.setResizable?.(true);
+    await win.setShadow?.(false);
+    await win.setSize(PANEL_SIZE);
+  } catch (e) {
+    console.warn(e);
+  }
+}
+
+// --- Mini Badge Mode ---
+function setupMiniBadge() {
+  const miniBadge = document.getElementById('mini-badge');
+  const app = document.getElementById('app');
+
+  if (!miniBadge || !app) return;
+
+  let collapseTimer = null;
+
+  function clearCollapseTimer() {
+    if (collapseTimer) {
+      clearTimeout(collapseTimer);
+      collapseTimer = null;
+    }
+  }
+
+  async function expandMiniBadge() {
+    if (!settings.miniBadgeMode) return;
+    clearCollapseTimer();
+    setMiniBadgeExpanded(true);
+    await resizeWindowForMiniBadge(true);
+  }
+
+  async function collapseMiniBadge() {
+    if (!settings.miniBadgeMode) return;
+    clearCollapseTimer();
+    setMiniBadgeExpanded(false);
+    await resizeWindowForMiniBadge(false);
+  }
+
+  function scheduleCollapse() {
+    if (!settings.miniBadgeMode || !document.body.classList.contains('expanded')) return;
+    clearCollapseTimer();
+    collapseTimer = setTimeout(collapseMiniBadge, 300);
+  }
+
+  miniBadge.addEventListener('mouseenter', expandMiniBadge);
+  app.addEventListener('mouseleave', scheduleCollapse);
+  app.addEventListener('mouseenter', clearCollapseTimer);
+  document.addEventListener('mouseleave', scheduleCollapse);
+  window.addEventListener('blur', scheduleCollapse);
+}
+
+function updateMiniBadge(snapshot) {
+  if (!snapshot || snapshot.error) return;
+
+  const percentEl = document.getElementById('mini-badge-percent');
+  const labelEl = document.getElementById('mini-badge-label');
+  const indicatorEl = document.getElementById('mini-badge-indicator');
+
+  if (!percentEl || !labelEl || !indicatorEl) return;
+
+  // Calculate all three usage percentages
+  const rollingPct = snapshot.usage?.rolling?.usage_percent ?? 0;
+  const weeklyPct = snapshot.usage?.weekly?.usage_percent ?? 0;
+  const monthlyPct = snapshot.usage?.monthly?.usage_percent ?? 0;
+
+  // Use the maximum of the three percentages
+  const percentage = Math.max(rollingPct, weeklyPct, monthlyPct);
+
+  percentEl.textContent = percentage + '%';
+
+  // Update label based on which period has the max usage
+  if (percentage === monthlyPct && percentage > weeklyPct) {
+    labelEl.textContent = 'Monthly';
+  } else if (percentage === weeklyPct && percentage > rollingPct) {
+    labelEl.textContent = 'Weekly';
+  } else {
+    labelEl.textContent = 'Rolling';
+  }
+
+  // Update indicator color based on usage
+  indicatorEl.classList.remove('warning', 'danger');
+  if (percentage >= settings.usageThreshold) {
+    indicatorEl.classList.add('danger');
+  } else if (percentage >= settings.usageThreshold * 0.8) {
+    indicatorEl.classList.add('warning');
+  }
 }
 
 // --- Data fetching ---
@@ -217,6 +349,7 @@ async function renderAll() {
 function applySnapshot(snapshot) {
   latestSnapshot = snapshot;
   updateFooter(snapshot);
+  updateMiniBadge(snapshot);
   renderUsageTab(snapshot, settings);
   renderModelsTab(snapshot);
   renderSettingsTab(snapshot, settings, settingActions, isPinned);
@@ -379,6 +512,7 @@ async function init() {
 
     setupWindowControls();
     setupWorkspaceSelector();
+    setupMiniBadge();
     console.log('[Init] Window controls setup complete');
     document.getElementById('btn-pin')?.classList.toggle('active', isPinned);
     applyUiSettings();
