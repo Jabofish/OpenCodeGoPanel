@@ -1,6 +1,6 @@
 /.superpowers
 /docs/superpowers
-target/
+target*/
 node_modules/
 /.codegraph
 CLAUDE.md
