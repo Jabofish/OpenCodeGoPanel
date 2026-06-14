@@ -45,13 +45,13 @@ pub struct UsageRecord {
     pub model: String,
     pub provider: String,
     #[serde(rename = "inputTokens")]
-    pub input_tokens: u64,
+    pub input_tokens: Option<u64>,
     #[serde(rename = "outputTokens")]
-    pub output_tokens: u64,
+    pub output_tokens: Option<u64>,
     #[serde(rename = "reasoningTokens")]
     pub reasoning_tokens: Option<u64>,
     #[serde(rename = "cacheReadTokens")]
-    pub cache_read_tokens: u64,
+    pub cache_read_tokens: Option<u64>,
     #[serde(rename = "cacheWrite5mTokens")]
     pub cache_write_5m_tokens: Option<u64>,
     #[serde(rename = "cacheWrite1hTokens")]
@@ -61,7 +61,7 @@ pub struct UsageRecord {
     pub key_id: String,
     #[serde(rename = "sessionID")]
     pub session_id: String,
-    pub enrichment: Enrichment,
+    pub enrichment: Option<Enrichment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

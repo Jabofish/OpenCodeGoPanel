@@ -53,6 +53,25 @@ pub async fn clear_auth(auth: tauri::State<'_, Arc<AuthStore>>) -> Result<(), St
 }
 
 #[tauri::command]
+pub async fn clear_cache(cache: tauri::State<'_, Arc<AppCache>>) -> Result<(), String> {
+    println!("[Command] clear_cache called");
+    cache.clear()
+}
+
+#[tauri::command]
+pub async fn hide_to_tray(
+    app: AppHandle,
+    scheduler: tauri::State<'_, Arc<RefreshScheduler>>,
+) -> Result<(), String> {
+    println!("[Command] hide_to_tray called");
+    scheduler.set_visible(false);
+    if let Some(window) = app.get_webview_window("main") {
+        window.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
 pub async fn open_login_window(app: AppHandle) -> Result<(), String> {
     println!("[Command] open_login_window called");
 

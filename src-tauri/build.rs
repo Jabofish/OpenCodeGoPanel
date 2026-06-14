@@ -7,6 +7,8 @@ fn main() {
             "set_visibility",
             "save_cookies",
             "clear_auth",
+            "clear_cache",
+            "hide_to_tray",
             "open_login_window",
             "extract_cookies_from_webview",
         ]),

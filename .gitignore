@@ -2,3 +2,5 @@
 /docs/superpowers
 target/
 node_modules/
+/.codegraph
+CLAUDE.md

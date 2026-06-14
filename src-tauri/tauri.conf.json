@@ -15,17 +15,17 @@
       {
         "label": "main",
         "title": "OpenCode Usage",
-        "width": 360,
-        "height": 480,
-        "minWidth": 320,
-        "minHeight": 400,
+        "width": 300,
+        "height": 360,
+        "minWidth": 280,
+        "minHeight": 320,
         "resizable": true,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
         "visible": true,
         "center": true,
-        "skipTaskbar": true
+        "skipTaskbar": false
       }
     ],
     "security": {

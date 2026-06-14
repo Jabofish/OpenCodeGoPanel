@@ -1,7 +1,7 @@
 import { formatTimeAgo } from './format.js';
 import { renderUsageTab } from './usage.js';
 import { renderModelsTab } from './models.js';
-import { renderTrendsTab } from './trends.js';
+import { renderSettingsTab } from './settings.js';
 
 // Check if Tauri API is available
 if (!window.__TAURI__) {
@@ -27,8 +27,51 @@ console.log('[App] Tauri API check:', {
 let currentTab = 'usage';
 let isPinned = true;
 let refreshTimer = null;
-let chartInstances = {};
+let snapshotTimer = null;
 let latestSnapshot = null;
+let settings = loadSettings();
+
+const settingActions = {
+  setPinned: async (value) => setPinned(value),
+  setAutoRefresh: (value) => updateSettings({ autoRefresh: value }),
+  setCompactMode: (value) => updateSettings({ compactMode: value }),
+  refresh: async () => {
+    await triggerRefresh();
+    await renderAll();
+  },
+  login: async () => openLoginWindow(),
+  clearAuth: async () => clearAuth(),
+  clearCache: async () => clearCache(),
+  hideToTray: async () => hideToTray(),
+  minimize: async () => minimizeWindow(),
+};
+
+function loadSettings() {
+  try {
+    return {
+      autoRefresh: true,
+      compactMode: true,
+      ...JSON.parse(localStorage.getItem('ocp-settings') || '{}'),
+    };
+  } catch (_) {
+    return { autoRefresh: true, compactMode: true };
+  }
+}
+
+function saveSettings() {
+  localStorage.setItem('ocp-settings', JSON.stringify(settings));
+}
+
+function updateSettings(next) {
+  settings = { ...settings, ...next };
+  saveSettings();
+  applyUiSettings();
+  renderSettingsTab(latestSnapshot, settings, settingActions, isPinned);
+}
+
+function applyUiSettings() {
+  document.body.classList.toggle('compact-mode', settings.compactMode);
+}
 
 // --- Data fetching ---
 async function fetchSnapshot() {
@@ -85,6 +128,30 @@ async function triggerRefresh() {
   }
 }
 
+async function clearAuth() {
+  console.log('[Auth] Clearing auth...');
+  try {
+    if (!invoke) return;
+    await invoke('clear_auth');
+    await triggerRefresh();
+    await renderAll();
+  } catch (e) {
+    console.error('[Auth] Clear failed:', e);
+  }
+}
+
+async function clearCache() {
+  console.log('[Cache] Clearing cache...');
+  try {
+    if (!invoke) return;
+    await invoke('clear_cache');
+    await renderAll();
+    await triggerRefresh();
+  } catch (e) {
+    console.error('[Cache] Clear failed:', e);
+  }
+}
+
 async function setVisibility(visible) {
   console.log('[Visibility] Setting visibility:', visible);
   try {
@@ -103,12 +170,7 @@ async function renderAll() {
   try {
     const snapshot = await fetchSnapshot();
     console.log('[Render] Snapshot received:', snapshot);
-    latestSnapshot = snapshot;
-
-    updateFooter(snapshot);
-    renderUsageTab(snapshot);
-    renderModelsTab(snapshot);
-    renderTrendsTab(snapshot, chartInstances);
+    applySnapshot(snapshot);
 
     // Check if need login
     if (snapshot.error && (snapshot.error.includes('Not logged in') || snapshot.error.includes('Not yet loaded'))) {
@@ -130,6 +192,14 @@ async function renderAll() {
   }
 }
 
+function applySnapshot(snapshot) {
+  latestSnapshot = snapshot;
+  updateFooter(snapshot);
+  renderUsageTab(snapshot);
+  renderModelsTab(snapshot);
+  renderSettingsTab(snapshot, settings, settingActions, isPinned);
+}
+
 function updateFooter(snapshot) {
   const footer = document.getElementById('footer-time');
   if (snapshot.error && snapshot.error.includes('Not logged in')) {
@@ -146,35 +216,37 @@ function switchTab(name) {
   currentTab = name;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
-  if (name === 'trends') renderTrendsTab(latestSnapshot, chartInstances);
+  if (name === 'settings') renderSettingsTab(latestSnapshot, settings, settingActions, isPinned);
 }
 
 // --- Window Controls ---
 function setupWindowControls() {
   document.getElementById('btn-pin').addEventListener('click', togglePin);
   document.getElementById('btn-min').addEventListener('click', minimizeWindow);
-  document.getElementById('btn-close').addEventListener('click', closeWindow);
-  document.getElementById('btn-hide').addEventListener('click', hideWindow);
+  document.getElementById('btn-close').addEventListener('click', hideToTray);
   document.getElementById('btn-refresh').addEventListener('click', async () => {
     await triggerRefresh();
     await renderAll();
   });
 }
 
-async function togglePin() {
-  console.log('[Controls] Pin clicked');
+async function setPinned(value) {
   try {
     if (getCurrentWindow) {
-      isPinned = !isPinned;
+      isPinned = value;
       await getCurrentWindow().setAlwaysOnTop(isPinned);
       document.getElementById('btn-pin').classList.toggle('active', isPinned);
-      console.log('[Controls] Always-on-top:', isPinned);
-    } else {
-      console.error('[Controls] getCurrentWindow not available');
+      renderSettingsTab(latestSnapshot, settings, settingActions, isPinned);
     }
   } catch (error) {
-    console.error('[Controls] Failed to toggle pin:', error);
+    console.error('[Controls] Failed to set pin:', error);
   }
+}
+
+async function togglePin() {
+  console.log('[Controls] Pin clicked');
+  await setPinned(!isPinned);
+  console.log('[Controls] Always-on-top:', isPinned);
 }
 
 async function minimizeWindow() {
@@ -191,32 +263,21 @@ async function minimizeWindow() {
   }
 }
 
-async function closeWindow() {
-  console.log('[Controls] Close clicked');
+async function hideToTray() {
+  console.log('[Controls] Hide to tray');
   try {
-    if (getCurrentWindow) {
-      await getCurrentWindow().close();
-      console.log('[Controls] Window closing...');
+    if (invoke) {
+      // Backend hides the window and flips the scheduler visibility flag so
+      // background refresh drops to the 10-minute cadence. The Rust layer
+      // separately intercepts CloseRequested events (Alt+F4, etc.) for the
+      // same effect, so this call is also the explicit in-app path.
+      await invoke('hide_to_tray');
+      console.log('[Controls] Window hidden to tray');
     } else {
-      console.error('[Controls] getCurrentWindow not available');
+      console.error('[Controls] invoke not available');
     }
   } catch (error) {
-    console.error('[Controls] Failed to close:', error);
-  }
-}
-
-async function hideWindow() {
-  console.log('[Controls] Hide clicked');
-  try {
-    await setVisibility(false);
-    if (getCurrentWindow) {
-      await getCurrentWindow().hide();
-      console.log('[Controls] Window hidden');
-    } else {
-      console.error('[Controls] getCurrentWindow not available');
-    }
-  } catch (error) {
-    console.error('[Controls] Failed to hide:', error);
+    console.error('[Controls] Failed to hide to tray:', error);
   }
 }
 
@@ -229,15 +290,14 @@ function setupTabs() {
 
 // --- Refresh loop ---
 function startRefreshLoop() {
-  refreshTimer = setInterval(async () => {
-    await triggerRefresh();
+  snapshotTimer = setInterval(async () => {
     const snapshot = await fetchSnapshot();
-    latestSnapshot = snapshot;
-    updateFooter(snapshot);
-    renderUsageTab(snapshot);
-    renderModelsTab(snapshot);
-    if (currentTab === 'trends') {
-      renderTrendsTab(snapshot, chartInstances);
+    applySnapshot(snapshot);
+  }, 3000);
+
+  refreshTimer = setInterval(async () => {
+    if (settings.autoRefresh) {
+      await triggerRefresh();
     }
   }, 30000); // 30s visible refresh
 }
@@ -253,6 +313,7 @@ async function init() {
     setupWindowControls();
     console.log('[Init] Window controls setup complete');
     document.getElementById('btn-pin')?.classList.toggle('active', isPinned);
+    applyUiSettings();
 
     // Add F12 for dev tools in debug mode
     document.addEventListener('keydown', async (e) => {
@@ -291,6 +352,3 @@ async function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
-
-// Export for other modules
-export { chartInstances };

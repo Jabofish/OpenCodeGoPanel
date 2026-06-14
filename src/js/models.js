@@ -12,9 +12,11 @@ export function renderModelsTab(snapshot) {
     return;
   }
 
-  let html = '<div class="card">';
+  const visibleModels = mc.models.slice(0, 6);
+  let html = '<div class="model-panel">';
+  html += '<div class="model-panel-head"><span>Total calls</span><strong>' + mc.total_calls.toLocaleString() + '</strong></div>';
 
-  mc.models.forEach((m, i) => {
+  visibleModels.forEach((m, i) => {
     const color = MODEL_COLORS[i % MODEL_COLORS.length];
     html += '' +
       '<div class="model-item">' +
@@ -33,7 +35,7 @@ export function renderModelsTab(snapshot) {
   });
 
   html += '<div class="model-summary">' +
-    'Usage across ' + mc.models.length + ' models' +
+    mc.models.length + ' models tracked' +
   '</div>';
 
   html += '</div>';

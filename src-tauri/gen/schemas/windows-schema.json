@@ -183,6 +183,12 @@
           "markdownDescription": "Enables the clear_auth command without any pre-configured scope."
         },
         {
+          "description": "Enables the clear_cache command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clear-cache",
+          "markdownDescription": "Enables the clear_cache command without any pre-configured scope."
+        },
+        {
           "description": "Enables the extract_cookies_from_webview command without any pre-configured scope.",
           "type": "string",
           "const": "allow-extract-cookies-from-webview",
@@ -199,6 +205,12 @@
           "type": "string",
           "const": "allow-get-snapshot",
           "markdownDescription": "Enables the get_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the hide_to_tray command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-hide-to-tray",
+          "markdownDescription": "Enables the hide_to_tray command without any pre-configured scope."
         },
         {
           "description": "Enables the open_login_window command without any pre-configured scope.",
@@ -231,6 +243,12 @@
           "markdownDescription": "Denies the clear_auth command without any pre-configured scope."
         },
         {
+          "description": "Denies the clear_cache command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-clear-cache",
+          "markdownDescription": "Denies the clear_cache command without any pre-configured scope."
+        },
+        {
           "description": "Denies the extract_cookies_from_webview command without any pre-configured scope.",
           "type": "string",
           "const": "deny-extract-cookies-from-webview",
@@ -247,6 +265,12 @@
           "type": "string",
           "const": "deny-get-snapshot",
           "markdownDescription": "Denies the get_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the hide_to_tray command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-hide-to-tray",
+          "markdownDescription": "Denies the hide_to_tray command without any pre-configured scope."
         },
         {
           "description": "Denies the open_login_window command without any pre-configured scope.",
