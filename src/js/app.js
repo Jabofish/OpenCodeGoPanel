@@ -35,6 +35,25 @@ const settingActions = {
   setPinned: async (value) => setPinned(value),
   setAutoRefresh: (value) => updateSettings({ autoRefresh: value }),
   setCompactMode: (value) => updateSettings({ compactMode: value }),
+  setBudget: (value) => updateSettings({ monthlyBudget: value }),
+  setHotkey: async (value) => {
+    try {
+      await invoke('set_hotkey', { hotkey: value });
+      updateSettings({ hotkey: value });
+    } catch (e) {
+      console.error('[Hotkey] Failed to set hotkey:', e);
+      alert('Failed to set hotkey: ' + e);
+    }
+  },
+  setThreshold: async (value) => {
+    try {
+      await invoke('set_threshold', { threshold: value });
+      updateSettings({ usageThreshold: value });
+    } catch (e) {
+      console.error('[Threshold] Failed:', e);
+      alert('Failed to set threshold: ' + e);
+    }
+  },
   refresh: async () => {
     await triggerRefresh();
     await renderAll();
@@ -51,10 +70,13 @@ function loadSettings() {
     return {
       autoRefresh: true,
       compactMode: true,
+      monthlyBudget: 6000,
+      hotkey: 'Ctrl+Shift+U',
+      usageThreshold: 80,
       ...JSON.parse(localStorage.getItem('ocp-settings') || '{}'),
     };
   } catch (_) {
-    return { autoRefresh: true, compactMode: true };
+    return { autoRefresh: true, compactMode: true, monthlyBudget: 6000, hotkey: 'Ctrl+Shift+U', usageThreshold: 80 };
   }
 }
 
@@ -195,9 +217,10 @@ async function renderAll() {
 function applySnapshot(snapshot) {
   latestSnapshot = snapshot;
   updateFooter(snapshot);
-  renderUsageTab(snapshot);
+  renderUsageTab(snapshot, settings);
   renderModelsTab(snapshot);
   renderSettingsTab(snapshot, settings, settingActions, isPinned);
+  loadWorkspaces();
 }
 
 function updateFooter(snapshot) {
@@ -209,6 +232,50 @@ function updateFooter(snapshot) {
   } else {
     footer.textContent = 'Updated ' + formatTimeAgo(snapshot.last_updated);
   }
+}
+
+// --- Workspace Switching ---
+async function loadWorkspaces() {
+  const sel = document.getElementById('workspace-selector');
+  if (!sel || !latestSnapshot) return;
+  try {
+    const workspaces = latestSnapshot.workspaces || [];
+    sel.innerHTML = '';
+    if (workspaces.length <= 1) {
+      sel.style.display = 'none';
+      return;
+    }
+    sel.style.display = '';
+    for (const ws of workspaces) {
+      const opt = document.createElement('option');
+      opt.value = ws.id;
+      opt.textContent = ws.name || ws.id;
+      opt.selected = ws.id === latestSnapshot.workspace_id;
+      sel.appendChild(opt);
+    }
+  } catch (e) {
+    console.warn('[Workspace] Failed to load:', e);
+    sel.style.display = 'none';
+  }
+}
+
+function setupWorkspaceSelector() {
+  const sel = document.getElementById('workspace-selector');
+  if (!sel) return;
+  sel.addEventListener('change', async () => {
+    const wid = sel.value;
+    if (!wid) return;
+    try {
+      console.log('[Workspace] Switching to:', wid);
+      await invoke('switch_workspace', { workspaceId: wid });
+      console.log('[Workspace] Switched OK, refreshing...');
+      // Re-render to show updated data (snapshot is refreshed by backend)
+      await new Promise(r => setTimeout(r, 500));
+      await renderAll();
+    } catch (e) {
+      console.error('[Workspace] Switch failed:', e);
+    }
+  });
 }
 
 // --- Tab Switching ---
@@ -311,9 +378,19 @@ async function init() {
     console.log('[Init] Tabs setup complete');
 
     setupWindowControls();
+    setupWorkspaceSelector();
     console.log('[Init] Window controls setup complete');
     document.getElementById('btn-pin')?.classList.toggle('active', isPinned);
     applyUiSettings();
+
+    // Sync threshold to backend on startup
+    if (settings.usageThreshold > 0) {
+      try {
+        await invoke('set_threshold', { threshold: settings.usageThreshold });
+      } catch (e) {
+        console.warn('[Init] Failed to sync threshold:', e);
+      }
+    }
 
     // Add F12 for dev tools in debug mode
     document.addEventListener('keydown', async (e) => {
@@ -334,6 +411,9 @@ async function init() {
 
     await renderAll();
     console.log('[Init] Initial render complete');
+
+    // Load workspace list
+    await loadWorkspaces();
 
     // Trigger refresh and re-render with the updated data
     await triggerRefresh();

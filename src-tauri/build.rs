@@ -11,6 +11,12 @@ fn main() {
             "hide_to_tray",
             "open_login_window",
             "extract_cookies_from_webview",
+            "get_history",
+            "set_hotkey",
+            "set_threshold",
+            "get_threshold",
+            "list_workspaces",
+            "switch_workspace",
         ]),
     ))
     .expect("failed to run Tauri build script");

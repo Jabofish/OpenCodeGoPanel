@@ -1,11 +1,13 @@
 use crate::auth::AuthStore;
 use crate::cache::AppCache;
 use crate::client::OpenCodeClient;
+use crate::history::HistoryStore;
 use crate::models::{AppDataSnapshot, UsageRecord};
 use chrono::Utc;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
+use tauri_plugin_notification::NotificationExt;
 use tokio::time::Duration;
 
 const USAGE_PAGE_SIZE: usize = 50;
@@ -16,8 +18,15 @@ pub struct RefreshScheduler {
     client: Arc<OpenCodeClient>,
     cache: Arc<AppCache>,
     auth_store: Arc<AuthStore>,
+    history_store: Arc<HistoryStore>,
     is_visible: Arc<AtomicBool>,
     is_refreshing: Arc<AtomicBool>,
+    /// Usage alert threshold (0 = disabled, 50-95 = percentage)
+    threshold: Arc<AtomicU32>,
+    /// Whether we've already fired an alert for the current threshold crossing
+    alerted: Arc<AtomicBool>,
+    /// App handle for sending notifications (set after setup)
+    app_handle: Mutex<Option<tauri::AppHandle>>,
 }
 
 impl RefreshScheduler {
@@ -25,15 +34,37 @@ impl RefreshScheduler {
         client: Arc<OpenCodeClient>,
         cache: Arc<AppCache>,
         auth_store: Arc<AuthStore>,
+        history_store: Arc<HistoryStore>,
         is_visible: Arc<AtomicBool>,
     ) -> Self {
         Self {
             client,
             cache,
             auth_store,
+            history_store,
             is_visible,
             is_refreshing: Arc::new(AtomicBool::new(false)),
+            threshold: Arc::new(AtomicU32::new(0)),
+            alerted: Arc::new(AtomicBool::new(false)),
+            app_handle: Mutex::new(None),
         }
+    }
+
+    /// Set the AppHandle for notification support (call during setup)
+    pub fn set_app_handle(&self, handle: tauri::AppHandle) {
+        *self.app_handle.lock().unwrap() = Some(handle);
+    }
+
+    /// Set the usage alert threshold
+    pub fn set_threshold(&self, threshold: u32) {
+        self.threshold.store(threshold.min(95), Ordering::Relaxed);
+        // Reset alerted flag when threshold changes
+        self.alerted.store(false, Ordering::Relaxed);
+    }
+
+    /// Get the current usage alert threshold
+    pub fn get_threshold(&self) -> u32 {
+        self.threshold.load(Ordering::Relaxed)
     }
 
     /// Start adaptive refresh loop: 30s when visible, 10min when hidden
@@ -54,7 +85,11 @@ impl RefreshScheduler {
         client: Arc<OpenCodeClient>,
         cache: Arc<AppCache>,
         auth_store: Arc<AuthStore>,
+        history_store: Arc<HistoryStore>,
         is_refreshing: Arc<AtomicBool>,
+        threshold: Arc<AtomicU32>,
+        alerted: Arc<AtomicBool>,
+        app_handle: Option<tauri::AppHandle>,
     ) {
         println!("[Scheduler] do_refresh started");
         let stored = match auth_store.load_cookies() {
@@ -82,17 +117,40 @@ impl RefreshScheduler {
 
         println!("[Scheduler] Fetching basic usage first...");
         match client.fetch_usage(&cookies, &workspace_id).await {
-            Ok(u) => {
+            Ok((u, workspaces)) => {
                 println!(
-                    "[Scheduler] Usage OK: rolling={}%, weekly={}%, monthly={}%",
-                    u.rolling.usage_percent, u.weekly.usage_percent, u.monthly.usage_percent
+                    "[Scheduler] Usage OK: rolling={}%, weekly={}%, monthly={}%, workspaces={}",
+                    u.rolling.usage_percent, u.weekly.usage_percent, u.monthly.usage_percent, workspaces.len()
                 );
                 cache.update_with(|snapshot| {
                     Self::prepare_workspace(snapshot, &workspace_id);
-                    snapshot.usage = u;
+                    snapshot.usage = u.clone();
+                    snapshot.workspaces = workspaces;
                     snapshot.error = None;
                     snapshot.last_updated = Utc::now().to_rfc3339();
                 });
+
+                // Check usage threshold for notification
+                let thresh = threshold.load(Ordering::Relaxed);
+                if thresh >= 50 && u.rolling.usage_percent >= thresh {
+                    let was_alerted = alerted.swap(true, Ordering::AcqRel);
+                    if !was_alerted {
+                        if let Some(ref handle) = app_handle {
+                            let title = "Usage Alert";
+                            let body = format!(
+                                "Rolling usage reached {}% (threshold: {}%)",
+                                u.rolling.usage_percent, thresh
+                            );
+                            let _ = handle.notification().builder()
+                                .title(title)
+                                .body(body)
+                                .show();
+                            println!("[Scheduler] Threshold alert sent: {}%", u.rolling.usage_percent);
+                        }
+                    }
+                } else if thresh >= 50 && u.rolling.usage_percent < thresh {
+                    alerted.store(false, Ordering::Relaxed);
+                }
             }
             Err(e) if e == "AUTH_EXPIRED" || e == "REDIRECT_TO_LOGIN" => {
                 println!("[Scheduler] Auth expired, clearing cookies");
@@ -103,13 +161,27 @@ impl RefreshScheduler {
             }
             Err(e) => {
                 println!("[Scheduler] Usage fetch error: {}", e);
-                cache.set_error(e);
+                // Don't clear existing usage data for non-auth errors
+                // (workspace may not have a Go plan — let frontend show info message)
+                cache.update_with(|snapshot| {
+                    if snapshot.error.is_none() {
+                        snapshot.error = Some(e);
+                    }
+                    snapshot.last_updated = Utc::now().to_rfc3339();
+                });
                 is_refreshing.store(false, Ordering::Release);
                 return;
             }
         }
 
         println!("[Scheduler] Basic usage cached; continuing slow data refresh in background");
+
+        // Record today's snapshot into history
+        {
+            let snapshot = cache.get();
+            history_store.record(&snapshot);
+        }
+
         let records_client = client.clone();
         let records_cache = cache.clone();
         let records_workspace_id = workspace_id.clone();
@@ -291,6 +363,7 @@ impl RefreshScheduler {
             snapshot.model_calls.total_calls = 0;
             snapshot.usage_records.clear();
             snapshot.daily_costs.clear();
+            // Don't clear workspaces - they're global to the user
         } else if snapshot.workspace_id.is_empty() {
             snapshot.workspace_id = workspace_id.to_string();
         }
@@ -322,11 +395,17 @@ impl RefreshScheduler {
             return;
         }
 
+        let app_handle = self.app_handle.lock().unwrap().clone();
+
         Self::do_refresh(
             self.client.clone(),
             self.cache.clone(),
             self.auth_store.clone(),
+            self.history_store.clone(),
             self.is_refreshing.clone(),
+            self.threshold.clone(),
+            self.alerted.clone(),
+            app_handle,
         )
         .await;
     }

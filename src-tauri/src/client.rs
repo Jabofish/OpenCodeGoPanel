@@ -1,6 +1,7 @@
 use crate::auth::CookieEntry;
 use crate::models::{
     DailyCostEntry, ModelCallCount, ModelCallStats, UsageInfo, UsagePeriod, UsageRecord,
+    WorkspaceEntry,
 };
 use chrono::Datelike;
 use regex::Regex;
@@ -111,7 +112,7 @@ impl OpenCodeClient {
         &self,
         cookies: &[CookieEntry],
         workspace_id: &str,
-    ) -> Result<UsageInfo, String> {
+    ) -> Result<(UsageInfo, Vec<WorkspaceEntry>), String> {
         let url = format!("{}/workspace/{}/go", self.base_url, workspace_id);
         let resp = self
             .client
@@ -127,7 +128,9 @@ impl OpenCodeClient {
                     .text()
                     .await
                     .map_err(|e| format!("Read error: {}", e))?;
-                Self::parse_usage_from_html(&html)
+                let usage = Self::parse_usage_from_html(&html)?;
+                let workspaces = Self::parse_workspaces_from_html(&html);
+                Ok((usage, workspaces))
             }
             reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN => {
                 Err("AUTH_EXPIRED".into())
@@ -140,29 +143,110 @@ impl OpenCodeClient {
     }
 
     fn parse_usage_from_html(html: &str) -> Result<UsageInfo, String> {
-        let parse_period = |pattern: &str| -> Result<UsagePeriod, String> {
-            let re = Regex::new(pattern).map_err(|e| e.to_string())?;
-            let caps = re
-                .captures(html)
-                .ok_or_else(|| format!("Failed to match: {}", pattern))?;
-            Ok(UsagePeriod {
-                status: caps[1].to_string(),
-                usage_percent: caps[3].parse().unwrap_or(0),
-                reset_in_sec: caps[2].parse().unwrap_or(0),
-            })
+        Ok(UsageInfo {
+            rolling: Self::parse_usage_period(html, "rollingUsage")?,
+            weekly: Self::parse_usage_period(html, "weeklyUsage")?,
+            monthly: Self::parse_usage_period(html, "monthlyUsage")?,
+        })
+    }
+
+    fn parse_usage_period(html: &str, key: &str) -> Result<UsagePeriod, String> {
+        let pattern = format!(r#"{}\s*:\s*\$R\[\d+\]\s*=\s*\{{([^}}]+)\}}"#, key);
+        let re = Regex::new(&pattern).map_err(|e| e.to_string())?;
+        let caps = re
+            .captures(html)
+            .ok_or_else(|| format!("Failed to match usage period: {}", key))?;
+        let body = caps
+            .get(1)
+            .ok_or_else(|| format!("Missing usage period body: {}", key))?
+            .as_str();
+
+        let status =
+            Self::extract_js_string_field(body, "status").unwrap_or_else(|| "unknown".into());
+        let usage_percent = Self::extract_js_u32_field(body, "usagePercent").unwrap_or(0);
+        let reset_in_sec = Self::extract_js_u64_field(body, "resetInSec").unwrap_or(0);
+
+        Ok(UsagePeriod {
+            status,
+            usage_percent,
+            reset_in_sec,
+        })
+    }
+
+    fn extract_js_string_field(body: &str, field: &str) -> Option<String> {
+        let pattern = format!(r#"{}\s*:\s*"([^"]*)""#, regex::escape(field));
+        Regex::new(&pattern)
+            .ok()?
+            .captures(body)?
+            .get(1)
+            .map(|m| m.as_str().to_string())
+    }
+
+    fn extract_js_u32_field(body: &str, field: &str) -> Option<u32> {
+        Self::extract_js_u64_field(body, field).and_then(|v| u32::try_from(v).ok())
+    }
+
+    fn extract_js_u64_field(body: &str, field: &str) -> Option<u64> {
+        let pattern = format!(r#"{}\s*:\s*(\d+)"#, regex::escape(field));
+        Regex::new(&pattern)
+            .ok()?
+            .captures(body)?
+            .get(1)?
+            .as_str()
+            .parse()
+            .ok()
+    }
+
+    /// Parse workspace list from HTML.
+    /// The HTML contains patterns like:
+    ///   $R[91] = [$R[92] = {id: "wrk_...", name: "Default", slug: null}, ...]
+    fn parse_workspaces_from_html(html: &str) -> Vec<WorkspaceEntry> {
+        // Find the workspace array: an assignment like $R[N] = [...] containing objects with id/name
+        let re = Regex::new(r#"\$R\[\d+]\s*=\s*\[((?:\$R\[\d+]\s*=\s*\{[^}]*\}[,\s]*)+)\]"#);
+        let re = match re {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
         };
 
-        Ok(UsageInfo {
-            rolling: parse_period(
-                r#"rollingUsage:\$R\[\d+\]=\{status:"(\w+)",resetInSec:(\d+),usagePercent:(\d+)\}"#,
-            )?,
-            weekly: parse_period(
-                r#"weeklyUsage:\$R\[\d+\]=\{status:"(\w+)",resetInSec:(\d+),usagePercent:(\d+)\}"#,
-            )?,
-            monthly: parse_period(
-                r#"monthlyUsage:\$R\[\d+\]=\{status:"(\w+)",resetInSec:(\d+),usagePercent:(\d+)\}"#,
-            )?,
-        })
+        // Look for arrays that contain objects with `id:` and `name:` (workspace-like)
+        for caps in re.captures_iter(html) {
+            let array_content = &caps[1];
+            // Check if this looks like a workspace array (has id: "wrk_" pattern)
+            if !array_content.contains("id:") || !array_content.contains("name:") {
+                continue;
+            }
+            // Only match workspace entries (id starts with "wrk_")
+            if !array_content.contains("\"wrk_") {
+                continue;
+            }
+
+            let mut workspaces = Vec::new();
+            let obj_re = Regex::new(
+                r#"\{id:\s*"([^"]+)",\s*name:\s*"([^"]*)"(?:,\s*slug:\s*(?:null|"([^"]*)"))?\}"#,
+            );
+            let obj_re = match obj_re {
+                Ok(r) => r,
+                Err(_) => return Vec::new(),
+            };
+
+            for obj_caps in obj_re.captures_iter(array_content) {
+                let id = obj_caps[1].to_string();
+                if id.starts_with("wrk_") {
+                    workspaces.push(WorkspaceEntry {
+                        id,
+                        name: obj_caps[2].to_string(),
+                        slug: obj_caps.get(3).map(|m| m.as_str().to_string()),
+                    });
+                }
+            }
+
+            if !workspaces.is_empty() {
+                println!("[Client] Parsed {} workspaces from HTML", workspaces.len());
+                return workspaces;
+            }
+        }
+
+        Vec::new()
     }
 
     pub async fn fetch_monthly_costs(
@@ -630,5 +714,38 @@ impl OpenCodeClient {
             }
         }
         Self::parse_record_array(&html[start..end]).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OpenCodeClient;
+
+    #[test]
+    fn parses_usage_periods_with_reordered_fields() {
+        let html = r#"
+            rollingUsage:$R[1]={usagePercent:42,status:"ok",resetInSec:120}
+            weeklyUsage:$R[2]={resetInSec:240,usagePercent:88,status:"ok"}
+            monthlyUsage:$R[3]={status:"ok",usagePercent:25,resetInSec:360}
+        "#;
+
+        let usage = OpenCodeClient::parse_usage_from_html(html).unwrap();
+        assert_eq!(usage.rolling.usage_percent, 42);
+        assert_eq!(usage.weekly.reset_in_sec, 240);
+        assert_eq!(usage.monthly.usage_percent, 25);
+    }
+
+    #[test]
+    fn parses_full_weekly_usage_without_reset_time() {
+        let html = r#"
+            rollingUsage:$R[1]={status:"ok",resetInSec:120,usagePercent:50}
+            weeklyUsage:$R[2]={status:"exhausted",usagePercent:100}
+            monthlyUsage:$R[3]={status:"ok",resetInSec:360,usagePercent:75}
+        "#;
+
+        let usage = OpenCodeClient::parse_usage_from_html(html).unwrap();
+        assert_eq!(usage.weekly.status, "exhausted");
+        assert_eq!(usage.weekly.usage_percent, 100);
+        assert_eq!(usage.weekly.reset_in_sec, 0);
     }
 }

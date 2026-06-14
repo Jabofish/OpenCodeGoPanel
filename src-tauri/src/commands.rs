@@ -1,10 +1,13 @@
-use crate::auth::{AuthStore, CookieEntry};
+use crate::auth::{AuthStore, CookieEntry, WorkspaceInfo};
 use crate::cache::AppCache;
-use crate::models::AppDataSnapshot;
+use crate::history::HistoryStore;
+use crate::models::{AppDataSnapshot, HistoryEntry};
 use crate::scheduler::RefreshScheduler;
+use crate::HotkeyState;
 use serde::Deserialize;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 
 #[tauri::command]
 pub async fn get_snapshot(
@@ -194,4 +197,112 @@ pub async fn extract_cookies_from_webview(
     }
 
     Ok(true)
+}
+
+#[tauri::command]
+pub async fn get_history(
+    history: tauri::State<'_, Arc<HistoryStore>>,
+    days: Option<u32>,
+) -> Result<Vec<HistoryEntry>, String> {
+    Ok(history.get_entries(days.unwrap_or(90)))
+}
+
+#[tauri::command]
+pub async fn set_hotkey(
+    app: AppHandle,
+    hotkey_state: tauri::State<'_, Arc<HotkeyState>>,
+    scheduler: tauri::State<'_, Arc<RefreshScheduler>>,
+    hotkey: String,
+) -> Result<(), String> {
+    // Unregister old shortcut
+    let old_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyU);
+    let _ = app.global_shortcut().unregister(old_shortcut);
+
+    // Parse new hotkey string (simplified: only supports Ctrl+Shift+<key>)
+    let parts: Vec<&str> = hotkey.split('+').collect();
+    if parts.len() != 3 {
+        return Err("Invalid hotkey format. Use Ctrl+Shift+<key>".into());
+    }
+    let key_char = parts[2].trim().to_uppercase();
+    if key_char.len() != 1 || !key_char.chars().next().unwrap().is_ascii_alphabetic() {
+        return Err("Hotkey key must be a single letter A-Z".into());
+    }
+    let code = match key_char.as_str() {
+        "A" => Code::KeyA, "B" => Code::KeyB, "C" => Code::KeyC, "D" => Code::KeyD,
+        "E" => Code::KeyE, "F" => Code::KeyF, "G" => Code::KeyG, "H" => Code::KeyH,
+        "I" => Code::KeyI, "J" => Code::KeyJ, "K" => Code::KeyK, "L" => Code::KeyL,
+        "M" => Code::KeyM, "N" => Code::KeyN, "O" => Code::KeyO, "P" => Code::KeyP,
+        "Q" => Code::KeyQ, "R" => Code::KeyR, "S" => Code::KeyS, "T" => Code::KeyT,
+        "U" => Code::KeyU, "V" => Code::KeyV, "W" => Code::KeyW, "X" => Code::KeyX,
+        "Y" => Code::KeyY, "Z" => Code::KeyZ,
+        _ => return Err("Unsupported key".into()),
+    };
+
+    let new_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), code);
+    let sched = scheduler.inner().clone();
+    let toggle_app = app.clone();
+    app.global_shortcut()
+        .on_shortcut(new_shortcut, move |_app, _event, _shortcut| {
+            crate::toggle_main_window(&toggle_app, &sched);
+        })
+        .map_err(|e| format!("Failed to register hotkey: {}", e))?;
+
+    *hotkey_state.current.lock().unwrap() = hotkey.clone();
+    println!("[Hotkey] Changed to: {}", hotkey);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_threshold(
+    scheduler: tauri::State<'_, Arc<RefreshScheduler>>,
+    threshold: u32,
+) -> Result<(), String> {
+    if threshold != 0 && (threshold < 50 || threshold > 95) {
+        return Err("Threshold must be 0 (disabled) or between 50 and 95".into());
+    }
+    scheduler.set_threshold(threshold);
+    println!("[Threshold] Set to: {}", threshold);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_threshold(
+    scheduler: tauri::State<'_, Arc<RefreshScheduler>>,
+) -> Result<u32, String> {
+    Ok(scheduler.get_threshold())
+}
+
+#[tauri::command]
+pub async fn list_workspaces(
+    auth: tauri::State<'_, Arc<AuthStore>>,
+) -> Result<Vec<WorkspaceInfo>, String> {
+    Ok(auth.list_workspaces())
+}
+
+#[tauri::command]
+pub async fn switch_workspace(
+    auth: tauri::State<'_, Arc<AuthStore>>,
+    scheduler: tauri::State<'_, Arc<RefreshScheduler>>,
+    cache: tauri::State<'_, Arc<AppCache>>,
+    workspace_id: String,
+) -> Result<(), String> {
+    // Try to update auth file (workspace may not be in auth if discovered from HTML)
+    let _ = auth.switch_workspace(&workspace_id);
+
+    // Update the workspace_id in the cache so the scheduler uses the new one
+    cache.update_with(|snapshot| {
+        snapshot.workspace_id = workspace_id.clone();
+        // Clear all per-workspace data but keep workspaces list
+        snapshot.model_calls.models.clear();
+        snapshot.model_calls.total_calls = 0;
+        snapshot.usage_records.clear();
+        snapshot.daily_costs.clear();
+        // Reset usage to unknown so old workspace data doesn't show
+        snapshot.usage = AppDataSnapshot::empty().usage;
+        snapshot.error = None;
+    });
+
+    // Trigger immediate refresh for the new workspace
+    scheduler.refresh_now().await;
+    Ok(())
 }

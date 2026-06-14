@@ -17,6 +17,12 @@
     "allow-clear-auth",
     "allow-clear-cache",
     "allow-hide-to-tray",
-    "allow-open-login-window"
+    "allow-open-login-window",
+    "allow-get-history",
+    "allow-set-hotkey",
+    "allow-set-threshold",
+    "allow-get-threshold",
+    "allow-list-workspaces",
+    "allow-switch-workspace"
   ]
 }

@@ -81,6 +81,25 @@ pub struct DailyCostEntry {
     pub plan: Option<String>,
 }
 
+/// Daily history entry for trend tracking (persisted locally)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    pub date: String, // "YYYY-MM-DD"
+    pub rolling_pct: u32,
+    pub weekly_pct: u32,
+    pub monthly_pct: u32,
+    pub total_cost: i64,
+    pub recorded_at: String, // ISO 8601
+}
+
+/// Workspace entry parsed from the workspace page HTML
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceEntry {
+    pub id: String,
+    pub name: String,
+    pub slug: Option<String>,
+}
+
 /// Snapshot of all cached data sent to frontend
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppDataSnapshot {
@@ -93,6 +112,8 @@ pub struct AppDataSnapshot {
     pub usage_records: Vec<UsageRecord>,
     /// Daily aggregated cost data (from /_server or local aggregation)
     pub daily_costs: Vec<DailyCostEntry>,
+    /// Workspaces available to the current user
+    pub workspaces: Vec<WorkspaceEntry>,
 }
 
 impl AppDataSnapshot {
@@ -124,6 +145,7 @@ impl AppDataSnapshot {
             error: Some("Not yet loaded".into()),
             usage_records: vec![],
             daily_costs: vec![],
+            workspaces: vec![],
         }
     }
 }
