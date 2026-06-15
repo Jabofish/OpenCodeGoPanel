@@ -13,6 +13,12 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned) {
       '<div class="settings-title">Window</div>' +
       buildToggle('setting-pin', 'Always on top', isPinned) +
       buildToggle('setting-mini-badge', 'Mini badge mode', settings.miniBadgeMode) +
+      buildSelect('setting-mini-badge-source', 'Mini badge source', settings.miniBadgeSource, [
+        { value: 'auto',    label: 'Auto (max of all)' },
+        { value: 'rolling', label: 'Rolling' },
+        { value: 'weekly',  label: 'Weekly' },
+        { value: 'monthly', label: 'Monthly' }
+      ]) +
       buildStatus('Taskbar icon', taskbarStatus) +
       buildAction('setting-minimize', 'Minimize to taskbar') +
       buildAction('setting-hide-to-tray', 'Hide to tray') +
@@ -47,6 +53,7 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned) {
   bindToggle('setting-auto-refresh', (value) => actions.setAutoRefresh(value));
   bindToggle('setting-compact', (value) => actions.setCompactMode(value));
   bindToggle('setting-mini-badge', (value) => actions.setMiniBadgeMode(value));
+  bindSelect('setting-mini-badge-source', (value) => actions.setMiniBadgeSource(value));
   bindAction('setting-refresh', actions.refresh);
   bindAction('setting-clear-cache', actions.clearCache);
   bindAction('setting-login', actions.login);
@@ -117,6 +124,19 @@ function buildInput(id, label, value, type, placeholder) {
   '</label>';
 }
 
+function buildSelect(id, label, value, options) {
+  const opts = options.map(o =>
+    '<option value="' + escapeHtml(o.value) + '"' +
+    (o.value === value ? ' selected' : '') + '>' +
+    escapeHtml(o.label) + '</option>'
+  ).join('');
+  return '' +
+    '<label class="setting-row setting-select-row">' +
+      '<span>' + escapeHtml(label) + '</span>' +
+      '<select id="' + id + '" class="setting-input">' + opts + '</select>' +
+    '</label>';
+}
+
 function bindToggle(id, handler) {
   document.getElementById(id)?.addEventListener('change', (event) => {
     handler(event.target.checked);
@@ -138,6 +158,12 @@ function bindInput(id, handler) {
       input.value = nextNumberValue(id, input.value, button.dataset.dir);
       handler(input.value);
     });
+  });
+}
+
+function bindSelect(id, handler) {
+  document.getElementById(id)?.addEventListener('change', (event) => {
+    handler(event.target.value);
   });
 }
 

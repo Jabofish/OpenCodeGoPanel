@@ -12,7 +12,7 @@ if (!window.__TAURI__) {
 
 // Use Tauri v2 global API
 const { invoke } = window.__TAURI__?.core || {};
-const { getCurrentWindow } = window.__TAURI__?.window || {};
+const { getCurrentWindow, cursorPosition } = window.__TAURI__?.window || {};
 const { getCurrentWebviewWindow } = window.__TAURI__?.webviewWindow || {};
 
 console.log('[App] Tauri API check:', {
@@ -41,6 +41,7 @@ const settingActions = {
   setAutoRefresh: (value) => updateSettings({ autoRefresh: value }),
   setCompactMode: (value) => updateSettings({ compactMode: value }),
   setMiniBadgeMode: (value) => updateSettings({ miniBadgeMode: value }),
+  setMiniBadgeSource: (value) => updateSettings({ miniBadgeSource: value }),
   setBudget: (value) => updateSettings({ monthlyBudget: value }),
   setHotkey: async (value) => {
     try {
@@ -77,13 +78,14 @@ function loadSettings() {
       autoRefresh: true,
       compactMode: true,
       miniBadgeMode: false,
+      miniBadgeSource: 'auto',
       monthlyBudget: 6000,
       hotkey: 'Ctrl+Shift+U',
       usageThreshold: 80,
       ...JSON.parse(localStorage.getItem('ocp-settings') || '{}'),
     };
   } catch (_) {
-    return { autoRefresh: true, compactMode: true, miniBadgeMode: false, monthlyBudget: 6000, hotkey: 'Ctrl+Shift+U', usageThreshold: 80 };
+    return { autoRefresh: true, compactMode: true, miniBadgeMode: false, miniBadgeSource: 'auto', monthlyBudget: 6000, hotkey: 'Ctrl+Shift+U', usageThreshold: 80 };
   }
 }
 
@@ -121,37 +123,62 @@ function setMiniBadgeExpanded(expanded) {
 }
 
 async function resizeWindowForMiniBadge(expanded) {
-  if (invoke) {
-    try {
-      await invoke('set_mini_badge_window', { expanded });
-      return;
-    } catch (e) {
-      console.warn('[MiniBadge] Native resize command failed, falling back:', e);
-    }
-  }
-
   if (!getCurrentWindow) return;
 
   try {
     const win = getCurrentWindow();
 
     if (settings.miniBadgeMode && !expanded) {
-      await win.setResizable?.(false);
+      await setWindowMaxSize(win, null);
       await win.setShadow?.(false);
-      await win.setMinSize(MINI_BADGE_SIZE);
-      await win.setSize(MINI_BADGE_SIZE);
-      await win.setMaxSize(MINI_BADGE_SIZE);
+      await setWindowMinSize(win, MINI_BADGE_SIZE);
+      await setWindowSize(win, MINI_BADGE_SIZE);
+      await setWindowMaxSize(win, MINI_BADGE_SIZE);
+      await win.setResizable?.(false);
       return;
     }
 
-    await win.setMaxSize(null);
-    await win.setMinSize(PANEL_MIN_SIZE);
+    await setWindowMaxSize(win, null);
+    await setWindowMinSize(win, PANEL_MIN_SIZE);
     await win.setResizable?.(true);
     await win.setShadow?.(false);
-    await win.setSize(PANEL_SIZE);
+    await setWindowSize(win, PANEL_SIZE);
   } catch (e) {
     console.warn(e);
   }
+}
+
+async function setWindowSize(win, size) {
+  return invokeWindowCommand(win, 'set_size', logicalSize(size));
+}
+
+async function setWindowMinSize(win, size) {
+  return invokeWindowCommand(win, 'set_min_size', size ? logicalSize(size) : null);
+}
+
+async function setWindowMaxSize(win, size) {
+  return invokeWindowCommand(win, 'set_max_size', size ? logicalSize(size) : null);
+}
+
+function logicalSize(size) {
+  return { Logical: { width: size.width, height: size.height } };
+}
+
+async function invokeWindowCommand(win, command, value) {
+  if (invoke) {
+    await invoke('plugin:window|' + command, {
+      label: win.label || 'main',
+      value,
+    });
+    return;
+  }
+
+  const method = {
+    set_size: 'setSize',
+    set_min_size: 'setMinSize',
+    set_max_size: 'setMaxSize',
+  }[command];
+  await win[method]?.(value);
 }
 
 // --- Mini Badge Mode ---
@@ -162,6 +189,9 @@ function setupMiniBadge() {
   if (!miniBadge || !app) return;
 
   let collapseTimer = null;
+  let pointerWatchTimer = null;
+  let pointerWatchInFlight = false;
+  let pointerOutsideSince = null;
 
   function clearCollapseTimer() {
     if (collapseTimer) {
@@ -175,11 +205,13 @@ function setupMiniBadge() {
     clearCollapseTimer();
     setMiniBadgeExpanded(true);
     await resizeWindowForMiniBadge(true);
+    startPointerWatch();
   }
 
   async function collapseMiniBadge() {
     if (!settings.miniBadgeMode) return;
     clearCollapseTimer();
+    stopPointerWatch();
     setMiniBadgeExpanded(false);
     await resizeWindowForMiniBadge(false);
   }
@@ -206,6 +238,63 @@ function setupMiniBadge() {
     collapseTimer = setTimeout(collapseMiniBadge, 300);
   }
 
+  function startPointerWatch() {
+    stopPointerWatch();
+    pointerOutsideSince = null;
+    pointerWatchTimer = setInterval(checkPointerInsideExpandedWindow, 120);
+  }
+
+  function stopPointerWatch() {
+    if (pointerWatchTimer) {
+      clearInterval(pointerWatchTimer);
+      pointerWatchTimer = null;
+    }
+    pointerWatchInFlight = false;
+    pointerOutsideSince = null;
+  }
+
+  async function checkPointerInsideExpandedWindow() {
+    if (pointerWatchInFlight || !settings.miniBadgeMode || !miniBadgeExpanded) return;
+    if (!cursorPosition || !getCurrentWindow) return;
+
+    pointerWatchInFlight = true;
+    try {
+      const win = getCurrentWindow();
+      const [cursor, position, size, scaleFactor] = await Promise.all([
+        cursorPosition(),
+        win.innerPosition(),
+        win.innerSize(),
+        win.scaleFactor?.() || Promise.resolve(1),
+      ]);
+      const expectedWidth = PANEL_SIZE.width * scaleFactor;
+      const expectedHeight = PANEL_SIZE.height * scaleFactor;
+      const width = Math.min(size.width, expectedWidth);
+      const height = Math.min(size.height, expectedHeight);
+
+      const margin = 2;
+      const inside =
+        cursor.x >= position.x - margin &&
+        cursor.y >= position.y - margin &&
+        cursor.x <= position.x + width + margin &&
+        cursor.y <= position.y + height + margin;
+
+      if (inside) {
+        pointerOutsideSince = null;
+        clearCollapseTimer();
+      } else {
+        pointerOutsideSince = pointerOutsideSince || Date.now();
+        if (Date.now() - pointerOutsideSince >= 180) {
+          await collapseMiniBadge();
+        }
+      }
+    } catch (e) {
+      console.warn('[MiniBadge] Pointer watch failed:', e);
+      stopPointerWatch();
+    } finally {
+      pointerWatchInFlight = false;
+    }
+  }
+
   miniBadge.addEventListener('mousedown', startMiniBadgeDrag);
   miniBadge.addEventListener('dblclick', (event) => {
     event.preventDefault();
@@ -222,29 +311,41 @@ function updateMiniBadge(snapshot) {
   const percentEl = document.getElementById('mini-badge-percent');
   const labelEl = document.getElementById('mini-badge-label');
   const indicatorEl = document.getElementById('mini-badge-indicator');
-
   if (!percentEl || !labelEl || !indicatorEl) return;
 
-  // Calculate all three usage percentages
   const rollingPct = snapshot.usage?.rolling?.usage_percent ?? 0;
-  const weeklyPct = snapshot.usage?.weekly?.usage_percent ?? 0;
+  const weeklyPct  = snapshot.usage?.weekly?.usage_percent  ?? 0;
   const monthlyPct = snapshot.usage?.monthly?.usage_percent ?? 0;
 
-  // Use the maximum of the three percentages
-  const percentage = Math.max(rollingPct, weeklyPct, monthlyPct);
+  const source = settings.miniBadgeSource || 'auto';
+  let percentage, label;
 
-  percentEl.textContent = percentage + '%';
-
-  // Update label based on which period has the max usage
-  if (percentage === monthlyPct && percentage > weeklyPct) {
-    labelEl.textContent = 'Monthly';
-  } else if (percentage === weeklyPct && percentage > rollingPct) {
-    labelEl.textContent = 'Weekly';
+  if (source === 'auto') {
+    percentage = Math.max(rollingPct, weeklyPct, monthlyPct);
+    if (percentage === monthlyPct && percentage > weeklyPct) {
+      label = 'Monthly';
+    } else if (percentage === weeklyPct && percentage > rollingPct) {
+      label = 'Weekly';
+    } else {
+      label = 'Rolling';
+    }
+  } else if (source === 'rolling') {
+    percentage = rollingPct;
+    label = 'Rolling';
+  } else if (source === 'weekly') {
+    percentage = weeklyPct;
+    label = 'Weekly';
+  } else if (source === 'monthly') {
+    percentage = monthlyPct;
+    label = 'Monthly';
   } else {
-    labelEl.textContent = 'Rolling';
+    percentage = Math.max(rollingPct, weeklyPct, monthlyPct);
+    label = 'Rolling';
   }
 
-  // Update indicator color based on usage
+  percentEl.textContent = percentage + '%';
+  labelEl.textContent = label;
+
   indicatorEl.classList.remove('warning', 'danger');
   if (percentage >= settings.usageThreshold) {
     indicatorEl.classList.add('danger');
@@ -557,8 +658,13 @@ async function init() {
         console.log('[DevTools] F12 pressed, attempting to toggle devtools...');
         try {
           if (getCurrentWebviewWindow) {
-            await getCurrentWebviewWindow().toggleDevtools();
-            console.log('[DevTools] Devtools toggled');
+            const webview = getCurrentWebviewWindow();
+            if (typeof webview.toggleDevtools === 'function') {
+              await webview.toggleDevtools();
+              console.log('[DevTools] Devtools toggled');
+            } else {
+              console.warn('[DevTools] toggleDevtools is not available in this runtime');
+            }
           } else {
             console.error('[DevTools] getCurrentWebviewWindow not available');
           }

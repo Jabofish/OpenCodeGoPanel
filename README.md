@@ -11,6 +11,17 @@ A compact Windows desktop panel for monitoring OpenCode Go usage.
 - Uses the OpenCode web login flow and stores cookies locally.
 - **New:** Mini badge mode with double-click expansion for compact desktop presence.
 
+## Release 0.0.4
+
+- **Smart pointer-watch auto-collapse:** The expanded mini badge now tracks the actual cursor position instead of a blind timer — stays open as long as the pointer remains inside the full panel, and collapses ~180 ms after the pointer leaves. This makes editing settings or glancing at details much more reliable.
+- **Daily cost chart:** The Usage tab now shows a bar chart of daily spend for the current month with a cumulative line overlay, powered by Chart.js. A total cost header is displayed above the chart.
+- **Configurable mini badge source:** A new dropdown in Settings lets you choose which usage period the mini badge displays — Auto (max of all), Rolling, Weekly, or Monthly — instead of always showing the maximum.
+- **Cache hit rate in Models tab:** Each model row now includes a cache-hit percentage (e.g. "CACHE 123K · 45.2%") alongside the cache-read token count.
+- **Window resize reliability:** Replaced direct JS `setSize`/`setMinSize`/`setMaxSize` calls with proper Tauri `plugin:window` invoke commands and `Logical` size format, fixing window-resize failures on some Windows configurations.
+- Expanded Tauri window capabilities (`cursor-position`, `inner-position`, `inner-size`, `set-max-size`, `set-min-size`, `set-resizable`, `set-shadow`, `set-size`) to support the new pointer-watch and resize flows.
+- **Settings dropdown widget:** Added a reusable select (dropdown) input for settings, used for the mini badge source picker.
+- Guarded the F12 devtools toggle to avoid runtime errors when `toggleDevtools` is not available in the current Tauri build.
+
 ## Release 0.0.3
 
 - Mini badge now expands only on double-click, keeping single-click drag behavior reliable.

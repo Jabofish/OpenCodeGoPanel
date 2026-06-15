@@ -2,6 +2,8 @@ import { formatCountdown, escapeHtml } from './format.js';
 
 const OPENCODE_COST_UNITS_PER_USD = 100000000;
 
+let _usageCostChart = null;
+
 export function renderUsageTab(snapshot, settings) {
   const container = document.getElementById('tab-usage');
   if (!container) return;
@@ -28,7 +30,6 @@ export function renderUsageTab(snapshot, settings) {
     const isAuth = err.includes('expired') || err.includes('Not logged');
 
     if (isNoGoPlan && rolling.status === 'unknown') {
-      // Workspace has no Go plan — show friendly message instead of error
       html += '<div class="info-banner">This workspace has no active Go plan.</div>';
     } else {
       html += '<div class="error-banner">' + escapeHtml(err);
@@ -61,7 +62,6 @@ export function renderUsageTab(snapshot, settings) {
   html += buildQuotaPill('Monthly', monthly, 'bar-monthly');
   html += '</div>';
 
-  // Budget section
   const budget = settings?.monthlyBudget || 0;
   if (budget > 0) {
     const totalSpentUnits = (snapshot.daily_costs || []).reduce((sum, c) => sum + (c.totalCost || 0), 0);
@@ -87,9 +87,21 @@ export function renderUsageTab(snapshot, settings) {
       '</div>';
   }
 
+  html += '' +
+    '<div class="cost-chart-section">' +
+      '<div class="cost-chart-header">' +
+        '<span>Daily Cost (this month)</span>' +
+        '<strong id="cost-chart-total"></strong>' +
+      '</div>' +
+      '<div class="cost-chart-canvas-wrap">' +
+        '<canvas id="usage-cost-chart" class="cost-chart-canvas"></canvas>' +
+      '</div>' +
+    '</div>';
+
   container.innerHTML = html;
 
-  // Attach login button event
+  renderCostChart(snapshot);
+
   const loginBtn = document.getElementById('btn-login');
   if (loginBtn) {
     loginBtn.addEventListener('click', async () => {
@@ -111,4 +123,124 @@ function buildQuotaPill(label, period, barClass) {
       '<div class="quota-reset">' + resetIn + '</div>' +
       '<div class="bar"><div class="bar-fill ' + barClass + '" style="width:' + Math.min(pct, 100) + '%"></div></div>' +
     '</div>';
+}
+
+function renderCostChart(snapshot) {
+  if (_usageCostChart) {
+    _usageCostChart.destroy();
+    _usageCostChart = null;
+  }
+
+  const costs = snapshot.daily_costs || [];
+  const totalEl = document.getElementById('cost-chart-total');
+  const canvas = document.getElementById('usage-cost-chart');
+
+  if (costs.length === 0) {
+    if (totalEl) totalEl.textContent = '';
+    if (canvas) canvas.style.display = 'none';
+    const section = canvas && canvas.parentElement;
+    if (section && !section.querySelector('.cost-chart-empty')) {
+      const empty = document.createElement('div');
+      empty.className = 'cost-chart-empty';
+      empty.textContent = '暂无当月成本数据';
+      section.appendChild(empty);
+    }
+    return;
+  }
+
+  if (canvas) canvas.style.display = 'block';
+  const leftover = canvas.parentElement.querySelector('.cost-chart-empty');
+  if (leftover) leftover.remove();
+
+  const byDate = new Map();
+  for (const entry of costs) {
+    const d = entry.date;
+    const v = entry.totalCost || 0;
+    byDate.set(d, (byDate.get(d) || 0) + v);
+  }
+  const labels = [...byDate.keys()].sort();
+  const data = labels.map(d => byDate.get(d) / OPENCODE_COST_UNITS_PER_USD);
+
+  let runningTotal = 0;
+  const cumulative = data.map(v => { runningTotal += v; return runningTotal; });
+
+  const total = data.reduce((s, v) => s + v, 0);
+  if (totalEl) totalEl.textContent = '$' + total.toFixed(2);
+
+  if (!canvas) return;
+  _usageCostChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [
+        {
+          type: 'bar',
+          label: 'Daily',
+          data: data,
+          yAxisID: 'yDaily',
+          backgroundColor: 'rgba(130, 162, 255, 0.55)',
+          borderColor: 'rgba(130, 162, 255, 0.55)',
+          borderWidth: 0,
+          borderRadius: 2,
+          barPercentage: 0.7,
+          categoryPercentage: 0.85,
+          order: 1
+        },
+        {
+          type: 'line',
+          label: 'Cumulative',
+          data: cumulative,
+          yAxisID: 'yCumulative',
+          borderColor: '#e9ae55',
+          backgroundColor: 'transparent',
+          borderWidth: 1.5,
+          pointRadius: 0,
+          pointHoverRadius: 3,
+          tension: 0,
+          fill: false,
+          order: 2
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (items) => items[0].label,
+            label: (item) => {
+              if (item.dataset.label === 'Cumulative') {
+                return 'Total: $' + item.parsed.y.toFixed(2);
+              }
+              return 'Day: $' + item.parsed.y.toFixed(4);
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          type: 'category',
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          ticks: { color: '#6e6e8a', font: { size: 9 }, maxRotation: 0, autoSkip: true, maxTicksLimit: 8 }
+        },
+        yDaily: {
+          type: 'linear',
+          position: 'left',
+          beginAtZero: true,
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          ticks: { color: '#6e6e8a', font: { size: 9 }, maxTicksLimit: 4, callback: (v) => '$' + v.toFixed(2) }
+        },
+        yCumulative: {
+          type: 'linear',
+          position: 'right',
+          beginAtZero: true,
+          grid: { drawOnChartArea: false },
+          ticks: { color: '#e9ae55', font: { size: 9 }, maxTicksLimit: 4, callback: (v) => '$' + v.toFixed(0) }
+        }
+      }
+    }
+  });
 }

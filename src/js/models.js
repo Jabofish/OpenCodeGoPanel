@@ -49,6 +49,8 @@ export function renderModelsTab(snapshot) {
     const color = MODEL_COLORS[i % MODEL_COLORS.length];
     const tokens = tokenMap[m.name] || { input: 0, output: 0, cacheRead: 0 };
     const hasTokens = tokens.input > 0 || tokens.output > 0 || tokens.cacheRead > 0;
+    const modelTotal = tokens.input + tokens.output + tokens.cacheRead;
+    const cacheRate = modelTotal > 0 ? (tokens.cacheRead / modelTotal * 100) : 0;
 
     html += '' +
       '<div class="model-item">' +
@@ -69,7 +71,7 @@ export function renderModelsTab(snapshot) {
         '<div class="model-tokens">' +
           '<span class="tok-in" title="Input tokens">IN ' + formatTokens(tokens.input) + '</span>' +
           '<span class="tok-out" title="Output tokens">OUT ' + formatTokens(tokens.output) + '</span>' +
-          '<span class="tok-cache" title="Cache read tokens">CACHE ' + formatTokens(tokens.cacheRead) + '</span>' +
+          '<span class="tok-cache" title="Cache read · ' + cacheRate.toFixed(1) + '% hit rate">CACHE ' + formatTokens(tokens.cacheRead) + ' · ' + cacheRate.toFixed(1) + '%</span>' +
         '</div>';
     }
 
