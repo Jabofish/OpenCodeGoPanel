@@ -100,9 +100,10 @@ body.mini-badge-mode.expanded #app {
   border-radius: 50%;
   background: var(--bg-shell);
   border: 2px solid var(--border-strong);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.42);
-  -webkit-app-region: drag;
-  cursor: move;
+  box-shadow: none;
+  -webkit-app-region: no-drag;
+  cursor: default;
+  touch-action: none;
   z-index: 9999;
   flex-direction: column;
   justify-content: center;
@@ -119,8 +120,6 @@ body.mini-badge-mode.expanded #mini-badge {
 }
 
 #mini-badge:hover {
-  transform: scale(1.05);
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5);
   border-color: rgba(130, 162, 255, 0.3);
 }
 
@@ -601,6 +600,13 @@ body.mini-badge-mode.expanded #mini-badge {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 8px;
+}
+.setting-input-row > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .setting-input {
   width: 80px;
@@ -613,6 +619,22 @@ body.mini-badge-mode.expanded #mini-badge {
   font-size: 11px;
   font-family: inherit;
   text-align: right;
+}
+#setting-hotkey {
+  width: 100%;
+  padding: 2px 6px;
+  text-align: left;
+}
+.setting-input-row-setting-hotkey {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 4px 3px 6px;
+}
+.setting-input-row-setting-hotkey > span:first-child {
+  overflow: visible;
+  white-space: normal;
+  text-overflow: clip;
 }
 .setting-input:focus {
   outline: none;

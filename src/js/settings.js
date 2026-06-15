@@ -6,7 +6,7 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned) {
 
   const ws = (snapshot?.workspaces || []).find(w => w.id === snapshot?.workspace_id);
   const workspace = ws?.name || snapshot?.workspace_id || 'Not set';
-  const taskbarStatus = 'On';
+  const taskbarStatus = 'Hidden';
 
   container.innerHTML = '' +
     '<div class="settings-group">' +
@@ -93,9 +93,10 @@ function buildAction(id, label) {
 }
 
 function buildInput(id, label, value, type, placeholder) {
+  const rowClass = 'setting-row setting-input-row setting-input-row-' + id;
   if (type === 'number') {
     const step = id === 'setting-budget' ? '0.01' : '1';
-    return '<label class="setting-row setting-input-row">' +
+    return '<label class="' + rowClass + '">' +
       '<span>' + escapeHtml(label) + '</span>' +
       '<span class="number-control">' +
         '<input id="' + id + '" type="number" value="' + escapeHtml(value || '') + '"' +
@@ -109,7 +110,7 @@ function buildInput(id, label, value, type, placeholder) {
     '</label>';
   }
 
-  return '<label class="setting-row setting-input-row">' +
+  return '<label class="' + rowClass + '">' +
     '<span>' + escapeHtml(label) + '</span>' +
     '<input id="' + id + '" type="' + (type || 'text') + '" value="' + escapeHtml(value || '') + '"' +
     (placeholder ? ' placeholder="' + escapeHtml(placeholder) + '"' : '') + ' class="setting-input">' +

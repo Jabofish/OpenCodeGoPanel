@@ -105,6 +105,9 @@ pub fn run() {
             scheduler.set_app_handle(app.handle().clone());
 
             setup_tray(app.handle(), scheduler.clone())?;
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.set_skip_taskbar(true);
+            }
 
             // Register global hotkey (default: Ctrl+Shift+U)
             let hotkey_app = app.handle().clone();

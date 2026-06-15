@@ -344,20 +344,12 @@ pub async fn switch_workspace(
     // Persist the active workspace before refreshing; the scheduler reads it from auth.
     auth.switch_workspace(&workspace_id)?;
 
-    // Update the workspace_id in the cache so the scheduler uses the new one
-    cache.update_with(|snapshot| {
-        snapshot.workspace_id = workspace_id.clone();
-        // Clear all per-workspace data but keep workspaces list
-        snapshot.model_calls.models.clear();
-        snapshot.model_calls.total_calls = 0;
-        snapshot.usage_records.clear();
-        snapshot.daily_costs.clear();
-        // Reset usage to unknown so old workspace data doesn't show
-        snapshot.usage = AppDataSnapshot::empty().usage;
-        snapshot.error = None;
-    });
+    // Show any persisted data for this workspace immediately, then refresh in the background.
+    cache.set_active_workspace(&workspace_id);
 
-    // Trigger immediate refresh for the new workspace
-    scheduler.refresh_now().await;
+    let scheduler = scheduler.inner().clone();
+    tauri::async_runtime::spawn(async move {
+        scheduler.refresh_now().await;
+    });
     Ok(())
 }

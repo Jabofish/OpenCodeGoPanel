@@ -30,6 +30,7 @@ let refreshTimer = null;
 let snapshotTimer = null;
 let latestSnapshot = null;
 let settings = loadSettings();
+let miniBadgeExpanded = false;
 
 const MINI_BADGE_SIZE = { width: 60, height: 60 };
 const PANEL_MIN_SIZE = { width: 280, height: 320 };
@@ -91,26 +92,32 @@ function saveSettings() {
 }
 
 function updateSettings(next) {
+  const miniBadgeModeChanged = Object.prototype.hasOwnProperty.call(next, 'miniBadgeMode') &&
+    next.miniBadgeMode !== settings.miniBadgeMode;
   settings = { ...settings, ...next };
   saveSettings();
-  applyUiSettings();
+  applyUiSettings({ collapseMiniBadge: miniBadgeModeChanged });
   renderSettingsTab(latestSnapshot, settings, settingActions, isPinned);
 }
 
-function applyUiSettings() {
+function applyUiSettings(options = {}) {
   document.documentElement.classList.toggle('mini-badge-mode', settings.miniBadgeMode);
   document.body.classList.toggle('compact-mode', settings.compactMode);
   document.body.classList.toggle('mini-badge-mode', settings.miniBadgeMode);
 
-  document.documentElement.classList.remove('expanded');
-  document.body.classList.remove('expanded');
+  const collapseMiniBadge = options.collapseMiniBadge ?? true;
 
-  resizeWindowForMiniBadge(false);
+  if (!settings.miniBadgeMode || collapseMiniBadge) {
+    setMiniBadgeExpanded(false);
+  }
+
+  resizeWindowForMiniBadge(settings.miniBadgeMode && miniBadgeExpanded);
 }
 
 function setMiniBadgeExpanded(expanded) {
-  document.documentElement.classList.toggle('expanded', expanded);
-  document.body.classList.toggle('expanded', expanded);
+  miniBadgeExpanded = expanded && settings.miniBadgeMode;
+  document.documentElement.classList.toggle('expanded', miniBadgeExpanded);
+  document.body.classList.toggle('expanded', miniBadgeExpanded);
 }
 
 async function resizeWindowForMiniBadge(expanded) {
@@ -177,17 +184,36 @@ function setupMiniBadge() {
     await resizeWindowForMiniBadge(false);
   }
 
+  function startMiniBadgeDrag(event) {
+    if (!settings.miniBadgeMode || miniBadgeExpanded || event.button !== 0) return;
+    if (event.detail >= 2) {
+      event.preventDefault();
+      expandMiniBadge();
+      return;
+    }
+
+    try {
+      const win = getCurrentWindow?.();
+      win?.startDragging?.().catch(e => console.warn('[MiniBadge] Failed to start dragging:', e));
+    } catch (e) {
+      console.warn('[MiniBadge] Failed to start dragging:', e);
+    }
+  }
+
   function scheduleCollapse() {
-    if (!settings.miniBadgeMode || !document.body.classList.contains('expanded')) return;
+    if (!settings.miniBadgeMode || !miniBadgeExpanded) return;
     clearCollapseTimer();
     collapseTimer = setTimeout(collapseMiniBadge, 300);
   }
 
-  miniBadge.addEventListener('mouseenter', expandMiniBadge);
+  miniBadge.addEventListener('mousedown', startMiniBadgeDrag);
+  miniBadge.addEventListener('dblclick', (event) => {
+    event.preventDefault();
+    expandMiniBadge();
+  });
   app.addEventListener('mouseleave', scheduleCollapse);
   app.addEventListener('mouseenter', clearCollapseTimer);
   document.addEventListener('mouseleave', scheduleCollapse);
-  window.addEventListener('blur', scheduleCollapse);
 }
 
 function updateMiniBadge(snapshot) {
@@ -401,10 +427,9 @@ function setupWorkspaceSelector() {
     try {
       console.log('[Workspace] Switching to:', wid);
       await invoke('switch_workspace', { workspaceId: wid });
-      console.log('[Workspace] Switched OK, refreshing...');
-      // Re-render to show updated data (snapshot is refreshed by backend)
-      await new Promise(r => setTimeout(r, 500));
+      console.log('[Workspace] Switched OK, showing cached data and refreshing...');
       await renderAll();
+      setTimeout(() => renderAll().catch(e => console.warn('[Workspace] Follow-up render failed:', e)), 700);
     } catch (e) {
       console.error('[Workspace] Switch failed:', e);
     }

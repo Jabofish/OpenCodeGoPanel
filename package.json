@@ -1,7 +1,7 @@
 {
   "name": "opencode-usage-panel",
   "private": true,
-  "version": "0.0.2",
+  "version": "0.0.3",
   "scripts": { "tauri": "tauri" },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
