@@ -142,7 +142,7 @@ function renderCostChart(snapshot) {
     if (section && !section.querySelector('.cost-chart-empty')) {
       const empty = document.createElement('div');
       empty.className = 'cost-chart-empty';
-      empty.textContent = '暂无当月成本数据';
+      empty.textContent = 'No data available.';
       section.appendChild(empty);
     }
     return;

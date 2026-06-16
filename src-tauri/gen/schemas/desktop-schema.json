@@ -189,6 +189,12 @@
           "markdownDescription": "Enables the clear_cache command without any pre-configured scope."
         },
         {
+          "description": "Enables the export_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-export-data",
+          "markdownDescription": "Enables the export_data command without any pre-configured scope."
+        },
+        {
           "description": "Enables the extract_cookies_from_webview command without any pre-configured scope.",
           "type": "string",
           "const": "allow-extract-cookies-from-webview",
@@ -205,6 +211,12 @@
           "type": "string",
           "const": "allow-get-history",
           "markdownDescription": "Enables the get_history command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-settings",
+          "markdownDescription": "Enables the get_settings command without any pre-configured scope."
         },
         {
           "description": "Enables the get_snapshot command without any pre-configured scope.",
@@ -249,10 +261,28 @@
           "markdownDescription": "Enables the save_cookies command without any pre-configured scope."
         },
         {
+          "description": "Enables the save_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-settings",
+          "markdownDescription": "Enables the save_settings command without any pre-configured scope."
+        },
+        {
           "description": "Enables the set_hotkey command without any pre-configured scope.",
           "type": "string",
           "const": "allow-set-hotkey",
           "markdownDescription": "Enables the set_hotkey command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_mini_badge_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-mini-badge-window",
+          "markdownDescription": "Enables the set_mini_badge_window command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_refresh_intervals command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-refresh-intervals",
+          "markdownDescription": "Enables the set_refresh_intervals command without any pre-configured scope."
         },
         {
           "description": "Enables the set_threshold command without any pre-configured scope.",
@@ -285,6 +315,12 @@
           "markdownDescription": "Denies the clear_cache command without any pre-configured scope."
         },
         {
+          "description": "Denies the export_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-export-data",
+          "markdownDescription": "Denies the export_data command without any pre-configured scope."
+        },
+        {
           "description": "Denies the extract_cookies_from_webview command without any pre-configured scope.",
           "type": "string",
           "const": "deny-extract-cookies-from-webview",
@@ -301,6 +337,12 @@
           "type": "string",
           "const": "deny-get-history",
           "markdownDescription": "Denies the get_history command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-settings",
+          "markdownDescription": "Denies the get_settings command without any pre-configured scope."
         },
         {
           "description": "Denies the get_snapshot command without any pre-configured scope.",
@@ -345,10 +387,28 @@
           "markdownDescription": "Denies the save_cookies command without any pre-configured scope."
         },
         {
+          "description": "Denies the save_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-settings",
+          "markdownDescription": "Denies the save_settings command without any pre-configured scope."
+        },
+        {
           "description": "Denies the set_hotkey command without any pre-configured scope.",
           "type": "string",
           "const": "deny-set-hotkey",
           "markdownDescription": "Denies the set_hotkey command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_mini_badge_window command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-mini-badge-window",
+          "markdownDescription": "Denies the set_mini_badge_window command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_refresh_intervals command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-refresh-intervals",
+          "markdownDescription": "Denies the set_refresh_intervals command without any pre-configured scope."
         },
         {
           "description": "Denies the set_threshold command without any pre-configured scope.",

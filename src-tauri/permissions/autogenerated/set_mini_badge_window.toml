@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-mini-badge-window"
+description = "Enables the set_mini_badge_window command without any pre-configured scope."
+commands.allow = ["set_mini_badge_window"]
+
+[[permission]]
+identifier = "deny-set-mini-badge-window"
+description = "Denies the set_mini_badge_window command without any pre-configured scope."
+commands.deny = ["set_mini_badge_window"]
