@@ -1,7 +1,7 @@
 use crate::auth::{AuthStore, CookieEntry, WorkspaceInfo};
 use crate::cache::AppCache;
 use crate::history::HistoryStore;
-use crate::models::{AppDataSnapshot, HistoryEntry};
+use crate::models::{AppDataSnapshot, HistoryEntry, LocalDataStatus, HealthCheck};
 use crate::paths;
 use crate::scheduler::RefreshScheduler;
 use crate::settings_store::{AppSettings, SettingsStore};
@@ -11,28 +11,24 @@ use serde::Deserialize;
 use std::sync::Arc;
 use tauri::{AppHandle, LogicalSize, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
+use tauri_plugin_notification::NotificationExt;
 
 #[tauri::command]
 pub async fn get_snapshot(
     cache: tauri::State<'_, Arc<AppCache>>,
 ) -> Result<AppDataSnapshot, String> {
-    println!("[Command] get_snapshot called");
     Ok(cache.get())
 }
 
 #[tauri::command]
 pub async fn refresh_now(scheduler: tauri::State<'_, Arc<RefreshScheduler>>) -> Result<(), String> {
-    println!("[Command] refresh_now called");
     scheduler.refresh_now().await;
     Ok(())
 }
 
 #[tauri::command]
 pub async fn get_auth_status(auth: tauri::State<'_, Arc<AuthStore>>) -> Result<bool, String> {
-    println!("[Command] get_auth_status called");
-    let has_auth = auth.has_valid_cookies();
-    println!("[Command] has_valid_cookies: {}", has_auth);
-    Ok(has_auth)
+    Ok(auth.has_valid_cookies())
 }
 
 #[tauri::command]
@@ -241,9 +237,16 @@ pub async fn extract_cookies_from_webview(
 #[tauri::command]
 pub async fn get_history(
     history: tauri::State<'_, Arc<HistoryStore>>,
+    cache: tauri::State<'_, Arc<AppCache>>,
     days: Option<u32>,
 ) -> Result<Vec<HistoryEntry>, String> {
-    Ok(history.get_entries(days.unwrap_or(90)))
+    let snapshot = cache.get();
+    let workspace_id = if snapshot.workspace_id.is_empty() {
+        None
+    } else {
+        Some(snapshot.workspace_id.as_str())
+    };
+    Ok(history.get_entries_for_workspace(days.unwrap_or(90), workspace_id))
 }
 
 #[tauri::command]
@@ -278,7 +281,7 @@ pub async fn set_threshold(
     scheduler: tauri::State<'_, Arc<RefreshScheduler>>,
     threshold: u32,
 ) -> Result<(), String> {
-    if threshold != 0 && (threshold < 50 || threshold > 95) {
+    if threshold != 0 && !(50..=95).contains(&threshold) {
         return Err("Threshold must be 0 (disabled) or between 50 and 95".into());
     }
     scheduler.set_threshold(threshold);
@@ -405,7 +408,7 @@ pub async fn export_data(
                 csv.push(',');
                 csv.push_str(&csv_cell(&r.session_id));
                 csv.push(',');
-                csv.push_str(&r.enrichment.as_ref().and_then(|e| e.plan.as_ref()).map_or(String::new(), |p| csv_cell(p)));
+                csv.push_str(&r.enrichment.as_ref().and_then(|e| e.plan.as_ref()).map_or(String::new(), csv_cell));
                 csv.push('\n');
             }
             std::fs::write(&path, csv).map_err(|e| e.to_string())?;
@@ -423,7 +426,7 @@ pub async fn export_data(
                 csv.push(',');
                 csv.push_str(&csv_cell(&d.key_id));
                 csv.push(',');
-                csv.push_str(&d.plan.as_ref().map_or(String::new(), |p| csv_cell(p)));
+                csv.push_str(&d.plan.as_ref().map_or(String::new(), csv_cell));
                 csv.push('\n');
             }
             std::fs::write(&path, csv).map_err(|e| e.to_string())?;
@@ -488,6 +491,170 @@ fn parse_ctrl_shift_letter_hotkey(hotkey: &str) -> Result<Code, String> {
         "Z" => Ok(Code::KeyZ),
         _ => Err("Unsupported key".into()),
     }
+}
+
+#[tauri::command]
+pub async fn send_test_notification(app: AppHandle) -> Result<(), String> {
+    app.notification()
+        .builder()
+        .title("OpenCode Usage")
+        .body("Notifications are working.")
+        .show()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn get_local_data_status(
+    _history: tauri::State<'_, Arc<HistoryStore>>,
+) -> Result<LocalDataStatus, String> {
+    let data_dir = paths::get_data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let file_bytes = |name: &str| -> u64 {
+        std::fs::metadata(data_dir.join(name))
+            .map(|m| m.len())
+            .unwrap_or(0)
+    };
+
+    let mut export_bytes = 0u64;
+    let mut export_count = 0u32;
+    let export_dir = data_dir.join("exports");
+    if let Ok(entries) = std::fs::read_dir(&export_dir) {
+        for entry in entries.flatten() {
+            if entry.metadata().map(|m| m.is_file()).unwrap_or(false) {
+                export_bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
+                export_count += 1;
+            }
+        }
+    }
+
+    Ok(LocalDataStatus {
+        data_dir: data_dir.to_string_lossy().into_owned(),
+        cache_bytes: file_bytes("opencode-cache.json"),
+        history_bytes: file_bytes("opencode-history.json"),
+        settings_bytes: file_bytes("opencode-settings.json"),
+        auth_bytes: file_bytes("opencode-auth.json"),
+        export_bytes,
+        export_count,
+    })
+}
+
+#[tauri::command]
+pub async fn backup_local_data(
+    cache: tauri::State<'_, Arc<AppCache>>,
+    history: tauri::State<'_, Arc<HistoryStore>>,
+    settings: tauri::State<'_, Arc<SettingsStore>>,
+) -> Result<String, String> {
+    let data_dir = paths::get_data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let export_dir = data_dir.join("exports");
+    std::fs::create_dir_all(&export_dir).map_err(|e| e.to_string())?;
+
+    let ts = Utc::now().format("%Y%m%d-%H%M%S");
+    let path = export_dir.join(format!("opencode-backup-{}.json", ts));
+
+    let backup = serde_json::json!({
+        "version": 1,
+        "createdAt": Utc::now().to_rfc3339(),
+        "settings": settings.get(),
+        "history": history.get_entries(90),
+        "cache": cache.get(),
+        "auth": null,
+    });
+
+    std::fs::write(&path, serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+pub async fn clear_local_data(
+    cache: tauri::State<'_, Arc<AppCache>>,
+    history: tauri::State<'_, Arc<HistoryStore>>,
+    scope: String,
+) -> Result<(), String> {
+    let data_dir = paths::get_data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    match scope.as_str() {
+        "cache" => cache.clear()?,
+        "history" => {
+            let hf = data_dir.join("opencode-history.json");
+            let _ = std::fs::remove_file(&hf);
+            history.clear();
+        }
+        "exports" => {
+            let export_dir = data_dir.join("exports");
+            if export_dir.exists() {
+                for entry in std::fs::read_dir(&export_dir).map_err(|e| e.to_string())? {
+                    let entry = entry.map_err(|e| e.to_string())?;
+                    if entry.metadata().map(|m| m.is_file()).unwrap_or(false) {
+                        std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
+                    }
+                }
+            }
+        }
+        "settings" => {
+            let sf = data_dir.join("opencode-settings.json");
+            let _ = std::fs::remove_file(&sf);
+        }
+        _ => {
+            return Err(format!(
+                "Unknown scope: {}. Use cache, history, exports, or settings.",
+                scope
+            ))
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn open_exports_folder() -> Result<String, String> {
+    let data_dir = paths::get_data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let export_dir = data_dir.join("exports");
+    std::fs::create_dir_all(&export_dir).map_err(|e| e.to_string())?;
+
+    let path_str = export_dir.to_string_lossy().to_string();
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(&export_dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&export_dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&export_dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+
+    Ok(path_str)
+}
+
+#[tauri::command]
+pub async fn run_health_check(
+    auth: tauri::State<'_, Arc<AuthStore>>,
+    cache: tauri::State<'_, Arc<AppCache>>,
+) -> Result<HealthCheck, String> {
+    let data_dir = paths::get_data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let snapshot = cache.get();
+    let history_ok = std::fs::metadata(data_dir.join("opencode-history.json"))
+        .map(|m| m.is_file())
+        .unwrap_or(true);
+
+    Ok(HealthCheck {
+        has_auth: auth.has_valid_cookies(),
+        cache_ok: true,
+        settings_ok: true,
+        history_ok,
+        data_dir: data_dir.to_string_lossy().into_owned(),
+        last_refresh_error: snapshot.error,
+    })
 }
 
 #[cfg(test)]

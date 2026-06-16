@@ -30,6 +30,16 @@
     "allow-set-threshold",
     "allow-get-threshold",
     "allow-list-workspaces",
-    "allow-switch-workspace"
+    "allow-switch-workspace",
+    "allow-get-settings",
+    "allow-save-settings",
+    "allow-set-refresh-intervals",
+    "allow-export-data",
+    "allow-send-test-notification",
+    "allow-get-local-data-status",
+    "allow-backup-local-data",
+    "allow-clear-local-data",
+    "allow-open-exports-folder",
+    "allow-run-health-check"
   ]
 }

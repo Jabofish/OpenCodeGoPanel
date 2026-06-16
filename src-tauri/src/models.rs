@@ -85,6 +85,7 @@ pub struct DailyCostEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntry {
     pub date: String, // "YYYY-MM-DD"
+    pub workspace_id: String,
     pub rolling_pct: u32,
     pub weekly_pct: u32,
     pub monthly_pct: u32,
@@ -167,4 +168,29 @@ impl AppDataSnapshot {
             },
         }
     }
+}
+
+/// Status of local data files (P4)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalDataStatus {
+    pub data_dir: String,
+    pub cache_bytes: u64,
+    pub history_bytes: u64,
+    pub settings_bytes: u64,
+    pub auth_bytes: u64,
+    pub export_bytes: u64,
+    pub export_count: u32,
+}
+
+/// Health check result (P8)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthCheck {
+    pub has_auth: bool,
+    pub cache_ok: bool,
+    pub settings_ok: bool,
+    pub history_ok: bool,
+    pub data_dir: String,
+    pub last_refresh_error: Option<String>,
 }

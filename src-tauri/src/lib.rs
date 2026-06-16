@@ -4,6 +4,7 @@ pub mod client;
 pub mod commands;
 pub mod history;
 pub mod models;
+pub mod notification_rules;
 pub mod paths;
 pub mod scheduler;
 pub mod settings_store;
@@ -45,7 +46,7 @@ pub fn run() {
     let history_store = Arc::new(HistoryStore::new(data_dir.clone()));
     println!("[Backend] HistoryStore created");
 
-    let settings_store = Arc::new(SettingsStore::new(data_dir));
+    let settings_store = Arc::new(SettingsStore::new(data_dir.clone()));
     println!("[Backend] SettingsStore created");
 
     let client = Arc::new(OpenCodeClient::new().expect("Failed to create HTTP client"));
@@ -57,6 +58,7 @@ pub fn run() {
         app_cache.clone(),
         auth_store.clone(),
         history_store.clone(),
+        settings_store.clone(),
         is_visible.clone(),
     ));
     println!("[Backend] Scheduler created");
@@ -94,6 +96,12 @@ pub fn run() {
             commands::save_settings,
             commands::set_refresh_intervals,
             commands::export_data,
+            commands::send_test_notification,
+            commands::get_local_data_status,
+            commands::backup_local_data,
+            commands::clear_local_data,
+            commands::open_exports_folder,
+            commands::run_health_check,
         ])
         .plugin(tauri_plugin_window_state::Builder::default().with_filename("opencode-window-state.json").build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())

@@ -3,12 +3,16 @@ import { renderUsageTab } from './usage.js';
 import { renderModelsTab } from './models.js';
 import { renderSettingsTab } from './settings.js';
 import { renderTrendsTab } from './trends.js';
+import { deriveUsageInsights, pickPrimaryRisk, formatInsightShort } from './insights.js';
+import { renderQuickPeek, openQuickPeek, closeQuickPeek, isQuickPeekOpen } from './quick-peek.js';
+import { getWorkspaceDisplayName, getWorkspaceProfile, sortWorkspaces } from './workspaces.js';
+import { showToast, showConfirm } from './toast.js';
 
 // Check if Tauri API is available
 if (!window.__TAURI__) {
   console.error('[App] FATAL: window.__TAURI__ is not available!');
   console.error('[App] This usually means Tauri failed to inject its API');
-  alert('Fatal Error: Tauri API not found. Please check if the app is running in Tauri environment.');
+  showToast('Fatal Error: Tauri API not found', { type: 'error', duration: 0 });
 }
 
 // Use Tauri v2 global API
@@ -44,26 +48,30 @@ let modelView = {
   query: '',
   sortBy: 'calls',
   showAll: false,
+  range: 'all',
 };
 
 const modelActions = {
   setQuery: (query) => {
     modelView = { ...modelView, query };
-    renderModelsTab(latestSnapshot, modelView);
+    renderModelsTab(latestSnapshot, modelView, modelActions);
   },
   setSortBy: (sortBy) => {
     modelView = { ...modelView, sortBy };
-    renderModelsTab(latestSnapshot, modelView);
+    renderModelsTab(latestSnapshot, modelView, modelActions);
   },
   toggleShowAll: () => {
     modelView = { ...modelView, showAll: !modelView.showAll };
-    renderModelsTab(latestSnapshot, modelView);
+    renderModelsTab(latestSnapshot, modelView, modelActions);
+  },
+  setRange: (range) => {
+    modelView = { ...modelView, range };
+    renderModelsTab(latestSnapshot, modelView, modelActions);
   },
 };
-// Expose for models.js event binding
-window._modelActions = modelActions;
 
 let latestHistory = [];
+let latestInsights = null;
 let historyDays = 30;
 
 const trendActions = {
@@ -75,6 +83,7 @@ const trendActions = {
 };
 
 const MINI_BADGE_SIZE = { width: 60, height: 60 };
+const MINI_BADGE_DOT_SIZE = { width: 28, height: 28 };
 const PANEL_MIN_SIZE = { width: 280, height: 320 };
 const PANEL_SIZE = { width: 320, height: 480 };
 
@@ -85,13 +94,17 @@ const settingActions = {
   setMiniBadgeMode: (value) => updateSettings({ miniBadgeMode: value }),
   setMiniBadgeSource: (value) => updateSettings({ miniBadgeSource: value }),
   setBudget: (value) => updateSettings({ monthlyBudget: value }),
+  setNotifyQuota: (value) => updateSettings({ notifyQuota: value }),
+  setNotifyBudgetProjection: (value) => updateSettings({ notifyBudgetProjection: value }),
+  setNotifyRefreshFailure: (value) => updateSettings({ notifyRefreshFailure: value }),
+  setQuietHoursEnabled: (value) => updateSettings({ quietHoursEnabled: value }),
   setHotkey: async (value) => {
     try {
       await invoke('set_hotkey', { hotkey: value });
       updateSettings({ hotkey: value });
     } catch (e) {
       console.error('[Hotkey] Failed to set hotkey:', e);
-      alert('Failed to set hotkey: ' + e);
+      showToast('Failed to set hotkey: ' + e, { type: 'error' });
     }
   },
   setThreshold: async (value) => {
@@ -100,7 +113,7 @@ const settingActions = {
       updateSettings({ usageThreshold: value });
     } catch (e) {
       console.error('[Threshold] Failed:', e);
-      alert('Failed to set threshold: ' + e);
+      showToast('Failed to set threshold: ' + e, { type: 'error' });
     }
   },
   setRefreshVisibleSecs: async (value) => {
@@ -134,11 +147,54 @@ const settingActions = {
   exportData: async (kind) => {
     try {
       const path = await invoke('export_data', { kind });
-      alert('Exported to: ' + path);
+      showToast('Exported to: ' + path, { type: 'success' });
     } catch (e) {
-      alert('Export failed: ' + e);
+      showToast('Export failed: ' + e, { type: 'error' });
     }
   },
+  setMiniBadgeDisplay: (value) => updateSettings({ miniBadgeDisplay: value }),
+  updateSettings: (patch) => updateSettings(patch),
+  sendTestNotification: async () => {
+    try {
+      await invoke('send_test_notification');
+      showToast('Test notification sent', { type: 'success' });
+    }
+    catch (e) { showToast('Failed: ' + e, { type: 'error' }); }
+  },
+  openExportsFolder: async () => {
+    try { await invoke('open_exports_folder'); }
+    catch (e) { console.error('Failed to open exports folder:', e); }
+  },
+  backupLocalData: async () => {
+    try {
+      const path = await invoke('backup_local_data');
+      console.log('Backup saved:', path);
+    }
+    catch (e) { console.error('Backup failed:', e); }
+  },
+  clearLocalData: async (scope) => {
+    const confirmed = await showConfirm(
+      `Clear ${scope} data? This cannot be undone.`,
+      { title: 'Confirm Clear', confirmText: 'Clear', cancelText: 'Cancel' }
+    );
+    if (!confirmed) return;
+    try {
+      await invoke('clear_local_data', { scope });
+      if (scope === 'cache') {
+        // Trigger immediate refresh after cache clear
+        await actions.refresh();
+      } else {
+        await renderAll();
+      }
+      showToast('Cleared ' + scope + ' data', { type: 'success' });
+    }
+    catch (e) {
+      console.error('Failed to clear ' + scope + ':', e);
+      showToast('Failed to clear ' + scope + ': ' + e, { type: 'error' });
+    }
+  },
+  renameWorkspace: () => renameCurrentWorkspace(),
+  toggleFavoriteWorkspace: () => toggleFavoriteCurrentWorkspace(),
 };
 
 function defaultSettings() {
@@ -147,11 +203,22 @@ function defaultSettings() {
     compactMode: true,
     miniBadgeMode: false,
     miniBadgeSource: 'auto',
+    miniBadgeDisplay: 'percent',
     monthlyBudget: 6000,
     hotkey: 'Ctrl+Shift+U',
     usageThreshold: 80,
     refreshVisibleSecs: 30,
     refreshHiddenSecs: 600,
+    recentWorkspaces: [],
+    workspaceProfiles: {},
+    notifyQuota: true,
+    notifyBudgetProjection: true,
+    notifyCostSpike: false,
+    notifyRefreshFailure: true,
+    quietHoursEnabled: false,
+    quietHoursStart: '22:00',
+    quietHoursEnd: '08:00',
+    notificationCooldownMins: 60,
   };
 }
 
@@ -202,7 +269,7 @@ function startHotkeyRecording() {
   const previous = settings.hotkey || 'Ctrl+Shift+U';
   settings.hotkeyRecording = true;
   // Update settings UI to show recording state
-  renderSettingsTab(latestSnapshot, settings, settingActions, isPinned);
+  renderSettingsTab(latestSnapshot, settings, settingActions, isPinned, localDataStatus);
 
   const onKeyDown = async (event) => {
     event.preventDefault();
@@ -211,7 +278,7 @@ function startHotkeyRecording() {
 
     const key = event.key?.toUpperCase();
     if (!event.ctrlKey || !event.shiftKey || !key || key.length !== 1 || !/^[A-Z]$/.test(key)) {
-      alert('Use Ctrl+Shift plus a letter A-Z.');
+      showToast('Use Ctrl+Shift plus a letter A-Z', { type: 'warning' });
       delete settings.hotkeyRecording;
       updateSettings({ hotkey: previous });
       return;
@@ -223,7 +290,7 @@ function startHotkeyRecording() {
       delete settings.hotkeyRecording;
       updateSettings({ hotkey });
     } catch (e) {
-      alert('Failed to set hotkey: ' + e);
+      showToast('Failed to set hotkey: ' + e, { type: 'error' });
       delete settings.hotkeyRecording;
       updateSettings({ hotkey: previous });
     }
@@ -232,19 +299,20 @@ function startHotkeyRecording() {
   document.addEventListener('keydown', onKeyDown, true);
 }
 
-function updateSettings(next) {
+async function updateSettings(next) {
   const miniBadgeModeChanged = Object.prototype.hasOwnProperty.call(next, 'miniBadgeMode') &&
     next.miniBadgeMode !== settings.miniBadgeMode;
   settings = { ...settings, ...next };
   saveSettings();
-  applyUiSettings({ collapseMiniBadge: miniBadgeModeChanged });
-  renderSettingsTab(latestSnapshot, settings, settingActions, isPinned);
+  await applyUiSettings({ collapseMiniBadge: miniBadgeModeChanged });
 }
 
-function applyUiSettings(options = {}) {
+async function applyUiSettings(options = {}) {
   document.documentElement.classList.toggle('mini-badge-mode', settings.miniBadgeMode);
   document.body.classList.toggle('compact-mode', settings.compactMode);
   document.body.classList.toggle('mini-badge-mode', settings.miniBadgeMode);
+  document.body.classList.toggle('badge-ring', settings.miniBadgeDisplay === 'ring');
+  document.body.classList.toggle('badge-dot', settings.miniBadgeDisplay === 'dot');
 
   const collapseMiniBadge = options.collapseMiniBadge ?? true;
 
@@ -252,7 +320,7 @@ function applyUiSettings(options = {}) {
     setMiniBadgeExpanded(false);
   }
 
-  resizeWindowForMiniBadge(settings.miniBadgeMode && miniBadgeExpanded);
+  await resizeWindowForMiniBadge(settings.miniBadgeMode && miniBadgeExpanded);
 }
 
 function setMiniBadgeExpanded(expanded) {
@@ -268,11 +336,12 @@ async function resizeWindowForMiniBadge(expanded) {
     const win = getCurrentWindow();
 
     if (settings.miniBadgeMode && !expanded) {
+      const badgeSize = settings.miniBadgeDisplay === 'dot' ? MINI_BADGE_DOT_SIZE : MINI_BADGE_SIZE;
       await setWindowMaxSize(win, null);
       await win.setShadow?.(false);
-      await setWindowMinSize(win, MINI_BADGE_SIZE);
-      await setWindowSize(win, MINI_BADGE_SIZE);
-      await setWindowMaxSize(win, MINI_BADGE_SIZE);
+      await setWindowMinSize(win, badgeSize);
+      await setWindowSize(win, badgeSize);
+      await setWindowMaxSize(win, badgeSize);
       await win.setResizable?.(false);
       return;
     }
@@ -487,9 +556,14 @@ function updateMiniBadge(snapshot) {
   percentEl.classList.toggle('three-digit', percentage >= 100);
   labelEl.textContent = label;
 
-  // Set title attribute on mini badge for accessibility
+  // Set title attribute on mini badge with insight if available
   if (miniBadge) {
-    miniBadge.title = label + ' usage: ' + percentage + '%';
+    const primary = pickPrimaryRisk(latestInsights);
+    if (primary) {
+      miniBadge.title = label + ' usage: ' + percentage + '% · ' + formatInsightShort(primary);
+    } else {
+      miniBadge.title = label + ' usage: ' + percentage + '%';
+    }
   }
 
   indicatorEl.classList.remove('warning', 'danger');
@@ -497,6 +571,15 @@ function updateMiniBadge(snapshot) {
     indicatorEl.classList.add('danger');
   } else if (percentage >= settings.usageThreshold * 0.8) {
     indicatorEl.classList.add('warning');
+  }
+
+  // Ring mode CSS variables
+  if (miniBadge) {
+    const ringColor = percentage >= settings.usageThreshold ? '#e06170'
+      : percentage >= settings.usageThreshold * 0.8 ? '#e9ae55'
+      : '#5fcf97';
+    miniBadge.style.setProperty('--badge-ring-pct', Math.min(percentage, 100) + '%');
+    miniBadge.style.setProperty('--badge-ring-color', ringColor);
   }
 }
 
@@ -646,13 +729,14 @@ async function renderAll() {
 function applySnapshot(snapshot) {
   latestSnapshot = snapshot;
   latestRefreshState = snapshot.refresh_state || null;
+  latestInsights = deriveUsageInsights(snapshot, latestHistory, settings);
   updateFooter(snapshot);
   updateRefreshButton(snapshot);
   updateMiniBadge(snapshot);
-  renderUsageTab(snapshot, settings);
-  renderModelsTab(snapshot, modelView);
+  renderUsageTab(snapshot, settings, latestInsights);
+  renderModelsTab(snapshot, modelView, modelActions);
   renderTrendsTab(latestHistory, snapshot, settings, trendActions, historyDays);
-  renderSettingsTab(snapshot, settings, settingActions, isPinned);
+  renderSettingsTab(snapshot, settings, settingActions, isPinned, localDataStatus);
   loadWorkspaces();
 }
 
@@ -701,12 +785,79 @@ function updateRefreshButton(snapshot) {
   btn.textContent = refreshing ? 'Refreshing' : 'Refresh';
 }
 
+function isTypingTarget(target) {
+  return target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName);
+}
+
 // --- Workspace Switching ---
+function rememberWorkspace(workspaceId) {
+  const next = [workspaceId, ...(settings.recentWorkspaces || []).filter(id => id !== workspaceId)].slice(0, 5);
+  updateSettings({ recentWorkspaces: next });
+}
+
+function renameCurrentWorkspace() {
+  const wid = latestSnapshot?.workspace_id;
+  if (!wid) return;
+  const profiles = { ...(settings.workspaceProfiles || {}) };
+  const current = profiles[wid]?.alias || '';
+  const alias = prompt('Workspace alias (empty to clear):', current);
+  if (alias === null) return; // cancelled
+  if (alias.trim()) {
+    profiles[wid] = { ...(profiles[wid] || {}), alias: alias.trim() };
+  } else {
+    if (profiles[wid]) delete profiles[wid].alias;
+  }
+  updateSettings({ workspaceProfiles: profiles });
+}
+
+function toggleFavoriteCurrentWorkspace() {
+  const wid = latestSnapshot?.workspace_id;
+  if (!wid) return;
+  const profiles = { ...(settings.workspaceProfiles || {}) };
+  const current = profiles[wid] || {};
+  profiles[wid] = { ...current, favorite: !current.favorite };
+  updateSettings({ workspaceProfiles: profiles });
+}
+
+let localDataStatus = null;
+
+async function fetchLocalDataStatus() {
+  try {
+    if (!invoke) return;
+    localDataStatus = await invoke('get_local_data_status');
+  } catch (e) {
+    console.warn('[Maintenance] Failed:', e);
+  }
+}
+
+async function switchWorkspaceById(workspaceId) {
+  const sel = document.getElementById('workspace-selector');
+  if (sel) sel.value = workspaceId;
+  // Trigger the selector change logic
+  workspaceSwitchState.previousId = latestSnapshot?.workspace_id || '';
+  workspaceSwitchState.switching = true;
+  workspaceSwitchState.error = null;
+  const footer = document.getElementById('footer-time');
+  if (footer) footer.textContent = 'Switching workspace...';
+  try {
+    await invoke('switch_workspace', { workspaceId });
+    workspaceSwitchState.switching = false;
+    rememberWorkspace(workspaceId);
+    await renderAll();
+    setTimeout(() => renderAll().catch(e => console.warn('[Workspace] Follow-up render failed:', e)), 700);
+  } catch (e) {
+    console.error('[Workspace] Switch failed:', e);
+    workspaceSwitchState.switching = false;
+    workspaceSwitchState.error = String(e);
+    if (sel) sel.value = workspaceSwitchState.previousId;
+  }
+}
+
 async function loadWorkspaces() {
   const sel = document.getElementById('workspace-selector');
   if (!sel || !latestSnapshot) return;
   try {
-    const workspaces = latestSnapshot.workspaces || [];
+    const workspaces = sortWorkspaces(latestSnapshot.workspaces || [], settings);
     sel.innerHTML = '';
     if (workspaces.length <= 1) {
       sel.style.display = 'none';
@@ -716,7 +867,8 @@ async function loadWorkspaces() {
     for (const ws of workspaces) {
       const opt = document.createElement('option');
       opt.value = ws.id;
-      opt.textContent = ws.name || ws.id;
+      const profile = getWorkspaceProfile(ws.id, settings);
+      opt.textContent = (profile.favorite ? '* ' : '') + getWorkspaceDisplayName(ws, settings);
       opt.selected = ws.id === latestSnapshot.workspace_id;
       sel.appendChild(opt);
     }
@@ -746,6 +898,7 @@ function setupWorkspaceSelector() {
       await invoke('switch_workspace', { workspaceId: wid });
       console.log('[Workspace] Switched OK, showing cached data and refreshing...');
       workspaceSwitchState.switching = false;
+      rememberWorkspace(wid);
       await renderAll();
       setTimeout(() => renderAll().catch(e => console.warn('[Workspace] Follow-up render failed:', e)), 700);
     } catch (e) {
@@ -768,7 +921,7 @@ function switchTab(name) {
   currentTab = name;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
-  if (name === 'settings') renderSettingsTab(latestSnapshot, settings, settingActions, isPinned);
+  if (name === 'settings') renderSettingsTab(latestSnapshot, settings, settingActions, isPinned, localDataStatus);
   if (name === 'trends') {
     fetchHistory(historyDays).then(history => {
       latestHistory = history;
@@ -794,7 +947,7 @@ async function setPinned(value) {
       isPinned = value;
       await getCurrentWindow().setAlwaysOnTop(isPinned);
       document.getElementById('btn-pin').classList.toggle('active', isPinned);
-      renderSettingsTab(latestSnapshot, settings, settingActions, isPinned);
+      renderSettingsTab(latestSnapshot, settings, settingActions, isPinned, localDataStatus);
     }
   } catch (error) {
     console.error('[Controls] Failed to set pin:', error);
@@ -860,6 +1013,32 @@ function startRefreshLoop() {
   }, 30000); // 30s visible refresh
 }
 
+function buildQuickPeekState() {
+  return {
+    snapshot: latestSnapshot,
+    settings,
+    insights: latestInsights,
+    currentTab,
+    recentWorkspaces: settings.recentWorkspaces || [],
+  };
+}
+
+const quickPeekActions = {
+  refresh: async () => {
+    await triggerRefresh();
+    closeQuickPeek();
+  },
+  switchTab: (tab) => {
+    switchTab(tab);
+    closeQuickPeek();
+  },
+  switchWorkspace: async (workspaceId) => {
+    await switchWorkspaceById(workspaceId);
+    closeQuickPeek();
+  },
+  close: () => closeQuickPeek(),
+};
+
 // --- Init ---
 async function init() {
   console.log('[Init] Starting application...');
@@ -897,8 +1076,20 @@ async function init() {
       console.warn('[Init] set_refresh_intervals not available:', e);
     }
 
-    // Add F12 for dev tools in debug mode
+    // Keyboard shortcuts: Quick Peek (Space/K), Esc to close, F12 devtools
     document.addEventListener('keydown', async (e) => {
+      // Esc closes Quick Peek
+      if (e.key === 'Escape' && isQuickPeekOpen()) {
+        closeQuickPeek();
+        return;
+      }
+      // Space or K opens Quick Peek (skip when typing in inputs)
+      if ((e.key === ' ' || e.key.toLowerCase() === 'k') && !isQuickPeekOpen() && !isTypingTarget(e.target)) {
+        e.preventDefault();
+        renderQuickPeek(buildQuickPeekState(), quickPeekActions);
+        return;
+      }
+      // F12 DevTools
       if (e.key === 'F12') {
         console.log('[DevTools] F12 pressed, attempting to toggle devtools...');
         try {
@@ -919,6 +1110,12 @@ async function init() {
       }
     });
 
+    // Titlebar click to open Quick Peek
+    document.getElementById('app-title')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      renderQuickPeek(buildQuickPeekState(), quickPeekActions);
+    });
+
     await renderAll();
     console.log('[Init] Initial render complete');
 
@@ -928,6 +1125,7 @@ async function init() {
     // Trigger refresh and re-render with the updated data
     await triggerRefresh();
     console.log('[Init] Initial refresh triggered, fetching updated snapshot...');
+    await fetchLocalDataStatus();
     await renderAll();
     console.log('[Init] Re-rendered with refreshed data');
 
@@ -937,7 +1135,7 @@ async function init() {
     console.log('[Init] Application ready!');
   } catch (error) {
     console.error('[Init] Fatal error:', error);
-    alert('Initialization failed: ' + error.message);
+    showToast('Initialization failed: ' + error.message, { type: 'error', duration: 0 });
   }
 }
 

@@ -62,7 +62,7 @@ async function extractAndSave(button) {
   const { invoke } = window.__TAURI__?.core || {};
 
   if (!invoke) {
-    alert('Tauri API not available');
+    console.error('Tauri API not available');
     return;
   }
 
@@ -149,8 +149,8 @@ async function extractAndSave(button) {
     button.textContent = 'Failed';
     button.style.background = 'linear-gradient(135deg, #eb3349 0%, #f45c43 100%)';
 
-    // Show user-friendly error message
-    alert('Failed to save login: ' + error.toString());
+    // Log error (no alert in injected script)
+    console.error('[LoginHelper] Failed to save login:', error);
 
     // Reset button after 3s
     setTimeout(() => {

@@ -217,13 +217,18 @@ impl AppCache {
     }
 
     /// Clear cached usage/model data for all workspaces from memory and disk.
+    /// Preserves workspace list and active workspace ID to avoid state loss.
     pub fn clear(&self) -> Result<(), String> {
         if let Ok(mut writer) = self.state.write() {
-            *writer = PersistedCache::empty();
-        }
+            // Keep workspace metadata, only clear snapshots
+            let active_workspace = writer.active_workspace.clone();
+            let workspaces = writer.workspaces.clone();
 
-        if self.cache_path.exists() {
-            std::fs::remove_file(&self.cache_path).map_err(|e| e.to_string())?;
+            *writer = PersistedCache::empty();
+            writer.active_workspace = active_workspace;
+            writer.workspaces = workspaces;
+
+            self.persist_locked(&writer);
         }
 
         Ok(())

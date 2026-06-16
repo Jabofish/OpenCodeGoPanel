@@ -3,6 +3,8 @@ use crate::cache::AppCache;
 use crate::client::OpenCodeClient;
 use crate::history::HistoryStore;
 use crate::models::{AppDataSnapshot, UsageRecord};
+use crate::notification_rules::{self, NotificationRuleState, ThresholdNotificationState};
+use crate::settings_store::SettingsStore;
 use chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -14,11 +16,28 @@ const USAGE_PAGE_SIZE: usize = 50;
 const MAX_USAGE_PAGES: u32 = 10_000;
 const USAGE_UPDATE_EVERY_PAGES: u32 = 5;
 
+/// Bundled Arcs passed into `do_refresh` to keep the argument count reasonable.
+struct RefreshContext {
+    client: Arc<OpenCodeClient>,
+    cache: Arc<AppCache>,
+    auth_store: Arc<AuthStore>,
+    history_store: Arc<HistoryStore>,
+    settings_store: Arc<SettingsStore>,
+    notification_rules: Arc<NotificationRuleState>,
+    threshold_notifications: Arc<ThresholdNotificationState>,
+    is_refreshing: Arc<AtomicBool>,
+    threshold: Arc<AtomicU32>,
+    consecutive_failures: Arc<AtomicU32>,
+}
+
 pub struct RefreshScheduler {
     client: Arc<OpenCodeClient>,
     cache: Arc<AppCache>,
     auth_store: Arc<AuthStore>,
     history_store: Arc<HistoryStore>,
+    settings_store: Arc<SettingsStore>,
+    notification_rules: Arc<NotificationRuleState>,
+    threshold_notifications: Arc<ThresholdNotificationState>,
     is_visible: Arc<AtomicBool>,
     is_refreshing: Arc<AtomicBool>,
     /// Usage alert threshold (0 = disabled, 50-95 = percentage)
@@ -31,6 +50,8 @@ pub struct RefreshScheduler {
     visible_interval_secs: Arc<AtomicU64>,
     /// Configurable refresh interval when window is hidden (seconds, 0 = off)
     hidden_interval_secs: Arc<AtomicU64>,
+    /// Consecutive refresh failures (reset on success)
+    consecutive_failures: Arc<AtomicU32>,
 }
 
 impl RefreshScheduler {
@@ -39,6 +60,7 @@ impl RefreshScheduler {
         cache: Arc<AppCache>,
         auth_store: Arc<AuthStore>,
         history_store: Arc<HistoryStore>,
+        settings_store: Arc<SettingsStore>,
         is_visible: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -46,6 +68,9 @@ impl RefreshScheduler {
             cache,
             auth_store,
             history_store,
+            settings_store,
+            notification_rules: Arc::new(NotificationRuleState::new()),
+            threshold_notifications: Arc::new(ThresholdNotificationState::new()),
             is_visible,
             is_refreshing: Arc::new(AtomicBool::new(false)),
             threshold: Arc::new(AtomicU32::new(0)),
@@ -53,6 +78,7 @@ impl RefreshScheduler {
             app_handle: Mutex::new(None),
             visible_interval_secs: Arc::new(AtomicU64::new(30)),
             hidden_interval_secs: Arc::new(AtomicU64::new(600)),
+            consecutive_failures: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -66,8 +92,9 @@ impl RefreshScheduler {
     /// Set the usage alert threshold
     pub fn set_threshold(&self, threshold: u32) {
         self.threshold.store(threshold.min(95), Ordering::Relaxed);
-        // Reset alerted flag when threshold changes
+        // Reset alerted flag and threshold notification state when threshold changes
         self.alerted.store(false, Ordering::Relaxed);
+        self.threshold_notifications.reset_all();
     }
 
     /// Get the current usage alert threshold
@@ -105,57 +132,43 @@ impl RefreshScheduler {
     }
 
     async fn do_refresh(
-        client: Arc<OpenCodeClient>,
-        cache: Arc<AppCache>,
-        auth_store: Arc<AuthStore>,
-        history_store: Arc<HistoryStore>,
-        is_refreshing: Arc<AtomicBool>,
-        threshold: Arc<AtomicU32>,
-        alerted: Arc<AtomicBool>,
+        ctx: RefreshContext,
         app_handle: Option<tauri::AppHandle>,
     ) {
-        println!("[Scheduler] do_refresh started");
-        let stored = match auth_store.load_cookies() {
+        let stored = match ctx.auth_store.load_cookies() {
             Some(s) => s,
             None => {
-                println!("[Scheduler] No cookies found, setting error");
-                cache.set_error("Not logged in".into());
-                cache.update_refresh_state(|rs| {
+                ctx.cache.set_error("Not logged in".into());
+                ctx.cache.update_refresh_state(|rs| {
                     rs.is_refreshing = false;
                     rs.phase = "error".into();
                     rs.last_finished_at = Some(Utc::now().to_rfc3339());
                     rs.last_error = Some("Not logged in".into());
                 });
-                is_refreshing.store(false, Ordering::Release);
+                ctx.is_refreshing.store(false, Ordering::Release);
                 return;
             }
         };
 
-        println!(
-            "[Scheduler] Loaded cookies for workspace: {}",
-            stored.workspace_id
-        );
-
         let workspace_id = stored.workspace_id.clone();
         let cookies = stored.cookies.clone();
 
-        cache.update_with(|snapshot| {
+        ctx.cache.update_with(|snapshot| {
             Self::prepare_workspace(snapshot, &workspace_id);
             snapshot.last_updated = Utc::now().to_rfc3339();
         });
 
-        println!("[Scheduler] Fetching basic usage first...");
-        cache.update_refresh_state(|rs| rs.phase = "usage".into());
-        match client.fetch_usage(&cookies, &workspace_id).await {
+        ctx.cache.update_refresh_state(|rs| rs.phase = "usage".into());
+        match ctx.client.fetch_usage(&cookies, &workspace_id).await {
             Ok((u, workspaces)) => {
                 println!(
-                    "[Scheduler] Usage OK: rolling={}%, weekly={}%, monthly={}%, workspaces={}",
+                    "[Refresh] workspace={} R={}% W={}% M={}%",
+                    workspace_id,
                     u.rolling.usage_percent,
                     u.weekly.usage_percent,
-                    u.monthly.usage_percent,
-                    workspaces.len()
+                    u.monthly.usage_percent
                 );
-                cache.update_with(|snapshot| {
+                ctx.cache.update_with(|snapshot| {
                     if snapshot.workspace_id != workspace_id {
                         println!(
                             "[Scheduler] Ignoring stale usage result for {}",
@@ -170,56 +183,73 @@ impl RefreshScheduler {
                     snapshot.last_updated = Utc::now().to_rfc3339();
                 });
 
-                // Check usage threshold for notification
-                let thresh = threshold.load(Ordering::Relaxed);
-                if thresh >= 50 && u.rolling.usage_percent >= thresh {
-                    let was_alerted = alerted.swap(true, Ordering::AcqRel);
-                    if !was_alerted {
-                        if let Some(ref handle) = app_handle {
-                            let title = "Usage Alert";
-                            let body = format!(
-                                "Rolling usage reached {}% (threshold: {}%)",
-                                u.rolling.usage_percent, thresh
-                            );
-                            let _ = handle
-                                .notification()
-                                .builder()
-                                .title(title)
-                                .body(body)
-                                .show();
-                            println!(
-                                "[Scheduler] Threshold alert sent: {}%",
-                                u.rolling.usage_percent
-                            );
+                // Success: reset consecutive failures
+
+                // --- Notification checks ---
+                let settings = ctx.settings_store.get();
+                let thresh = ctx.threshold.load(Ordering::Relaxed);
+                let is_quiet = settings.quiet_hours_enabled
+                    && notification_rules::is_in_quiet_hours(
+                        &settings.quiet_hours_start,
+                        &settings.quiet_hours_end,
+                    );
+                if !is_quiet {
+                    let _cooldown = settings.notification_cooldown_mins;
+
+                    // Quota notification (highest of rolling/weekly/monthly)
+                    if settings.notify_quota && thresh >= 50 {
+                        // Check each period independently
+                        for (period, pct) in [
+                            ("Rolling", u.rolling.usage_percent),
+                            ("Weekly", u.weekly.usage_percent),
+                            ("Monthly", u.monthly.usage_percent),
+                        ] {
+                            let (should_notify, _) = ctx.threshold_notifications
+                                .should_notify_threshold(&workspace_id, period, pct, thresh);
+                            if should_notify {
+                                if let Some(ref handle) = app_handle {
+                                    let _ = handle
+                                        .notification()
+                                        .builder()
+                                        .title("Quota Alert")
+                                        .body(format!(
+                                            "{} usage reached {}% (threshold {}%).",
+                                            period, pct, thresh
+                                        ))
+                                        .show();
+                                    println!(
+                                        "[Scheduler] Quota notification: {} at {}%",
+                                        period, pct
+                                    );
+                                }
+                            }
                         }
                     }
-                } else if thresh >= 50 && u.rolling.usage_percent < thresh {
-                    alerted.store(false, Ordering::Relaxed);
+
+                    // Refresh failure notification (not applicable on success, but
+                    // tracked via consecutive_failures elsewhere)
+                    // Budget projection is checked after costs refresh in spawn
                 }
             }
             Err(e) if e == "AUTH_EXPIRED" || e == "REDIRECT_TO_LOGIN" => {
-                println!("[Scheduler] Auth expired, clearing cookies");
-                auth_store.clear_cookies().ok();
-                cache.set_error("Session expired. Please log in again.".into());
-                cache.update_refresh_state(|rs| {
+                println!("[Refresh] Auth expired, clearing cookies");
+                ctx.auth_store.clear_cookies().ok();
+                ctx.cache.set_error("Session expired. Please log in again.".into());
+                ctx.cache.update_refresh_state(|rs| {
                     rs.is_refreshing = false;
                     rs.phase = "error".into();
                     rs.last_finished_at = Some(Utc::now().to_rfc3339());
                     rs.last_error = Some(e);
                 });
-                is_refreshing.store(false, Ordering::Release);
+                ctx.is_refreshing.store(false, Ordering::Release);
                 return;
             }
             Err(e) => {
                 println!("[Scheduler] Usage fetch error: {}", e);
                 // Don't clear existing usage data for non-auth errors
                 // (workspace may not have a Go plan — let frontend show info message)
-                cache.update_with(|snapshot| {
+                ctx.cache.update_with(|snapshot| {
                     if snapshot.workspace_id != workspace_id {
-                        println!(
-                            "[Scheduler] Ignoring stale usage error for {}",
-                            workspace_id
-                        );
                         return;
                     }
                     if snapshot.error.is_none() {
@@ -231,26 +261,28 @@ impl RefreshScheduler {
                     snapshot.refresh_state.last_error = Some(e.clone());
                     snapshot.last_updated = Utc::now().to_rfc3339();
                 });
-                is_refreshing.store(false, Ordering::Release);
+                ctx.is_refreshing.store(false, Ordering::Release);
                 return;
             }
         }
 
-        println!("[Scheduler] Basic usage cached; continuing slow data refresh in background");
+        ctx.cache.update_refresh_state(|rs| rs.phase = "records".into());
 
-        cache.update_refresh_state(|rs| rs.phase = "records".into());
-
-        let records_client = client.clone();
-        let records_cache = cache.clone();
+        let records_client = ctx.client.clone();
+        let records_cache = ctx.cache.clone();
         let records_workspace_id = workspace_id.clone();
         let records_cookies = cookies.clone();
 
-        let costs_client = client.clone();
-        let costs_cache = cache.clone();
+        let costs_client = ctx.client.clone();
+        let costs_cache = ctx.cache.clone();
         let costs_workspace_id = workspace_id.clone();
         let costs_cookies = cookies.clone();
-        let costs_auth = auth_store.clone();
-        let records_history = history_store.clone();
+        let costs_auth = ctx.auth_store.clone();
+        let records_history = ctx.history_store.clone();
+        let spawn_notify_rules = ctx.notification_rules.clone();
+        let spawn_settings = ctx.settings_store.clone();
+        let _spawn_consecutive_failures = ctx.consecutive_failures.clone();
+        let spawn_app_handle = app_handle.clone();
 
         tokio::spawn(async move {
             let records = Self::refresh_usage_records_incremental(
@@ -262,7 +294,7 @@ impl RefreshScheduler {
             .await;
 
             if let Err(e) = records {
-                Self::handle_fetch_error(&records_cache, &auth_store, e, "usage records");
+                Self::handle_fetch_error(&records_cache, &costs_auth, e, "usage records");
             }
 
             records_cache.update_refresh_state(|rs| rs.phase = "costs".into());
@@ -279,17 +311,114 @@ impl RefreshScheduler {
                 Self::handle_fetch_error(&costs_cache, &costs_auth, e, "monthly costs");
             }
 
-            println!("[Scheduler] Slow data refresh complete");
+            println!("[Refresh] slow data complete");
             {
                 let snapshot = records_cache.get();
+
+                // Rebuild history from daily_costs if needed
+                records_history.rebuild_from_daily_costs(&snapshot);
+
+                // Record today's entry
                 records_history.record(&snapshot);
+
+                // Budget projection & cost spike notifications
+                let settings = spawn_settings.get();
+                let is_quiet = settings.quiet_hours_enabled
+                    && notification_rules::is_in_quiet_hours(
+                        &settings.quiet_hours_start,
+                        &settings.quiet_hours_end,
+                    );
+                if !is_quiet {
+                    let cooldown = settings.notification_cooldown_mins;
+                    let now = Utc::now();
+                    let now_str = now.format("%Y-%m-%d").to_string();
+                    let now_ym = &now_str[..7]; // "YYYY-MM"
+
+                    // Budget projection
+                    if settings.notify_budget_projection && settings.monthly_budget > 0 {
+                        let budget_usd = settings.monthly_budget as f64 / 100.0;
+                        let daily_costs = &snapshot.daily_costs;
+                        let month_cost: i64 = daily_costs
+                            .iter()
+                            .filter(|c| c.date.starts_with(now_ym))
+                            .map(|c| c.total_cost)
+                            .sum();
+                        let month_cost_usd = month_cost as f64 / 100_000_000.0;
+
+                        // Only notify if ACTUAL spending exceeds budget, not projected
+                        let actual_pct = if budget_usd > 0.0 {
+                            month_cost_usd / budget_usd * 100.0
+                        } else {
+                            0.0
+                        };
+
+                        if actual_pct >= 100.0 {
+                            let key = format!("budget_exceeded:{}:{}", records_workspace_id, now_ym);
+                            if spawn_notify_rules.should_send(&key, cooldown) {
+                                if let Some(ref handle) = spawn_app_handle {
+                                    let _ = handle
+                                        .notification()
+                                        .builder()
+                                        .title("Budget Exceeded")
+                                        .body(format!(
+                                            "Monthly spending has reached {:.0}% of budget (${:.2} / ${:.2}).",
+                                            actual_pct, month_cost_usd, budget_usd
+                                        ))
+                                        .show();
+                                    spawn_notify_rules.mark_sent(&key);
+                                }
+                            }
+                        }
+                    }
+
+                    // Cost spike
+                    if settings.notify_cost_spike {
+                        let today_str = now.format("%Y-%m-%d").to_string();
+                        let mut today_cost: i64 = 0;
+                        let mut month_total: i64 = 0;
+                        let mut day_count: i64 = 0;
+                        for c in &snapshot.daily_costs {
+                            if c.date.starts_with(now_ym) {
+                                month_total += c.total_cost;
+                                day_count += 1;
+                                if c.date == today_str {
+                                    today_cost += c.total_cost;
+                                }
+                            }
+                        }
+                        let avg = if day_count > 0 {
+                            month_total as f64 / day_count as f64
+                        } else {
+                            0.0
+                        };
+                        let today_usd = today_cost as f64 / 100_000_000.0;
+                        let avg_usd = avg / 100_000_000.0;
+                        if today_usd >= avg_usd * 1.8 && today_usd >= 0.25 {
+                            let key = format!("cost_spike:{}:{}", records_workspace_id, today_str);
+                            if spawn_notify_rules.should_send(&key, cooldown) {
+                                if let Some(ref handle) = spawn_app_handle {
+                                    let _ = handle
+                                        .notification()
+                                        .builder()
+                                        .title("Cost Spike")
+                                        .body(format!(
+                                            "Today ${:.2} vs daily avg ${:.2}.",
+                                            today_usd, avg_usd
+                                        ))
+                                        .show();
+                                    spawn_notify_rules.mark_sent(&key);
+                                }
+                            }
+                        }
+                    }
+                }
             }
             records_cache.update_refresh_state(|rs| {
                 rs.is_refreshing = false;
                 rs.phase = "done".into();
                 rs.last_finished_at = Some(Utc::now().to_rfc3339());
             });
-            is_refreshing.store(false, Ordering::Release);
+            ctx.is_refreshing.store(false, Ordering::Release);
         });
     }
 
@@ -366,10 +495,9 @@ impl RefreshScheduler {
             Self::apply_usage_records(&cache, &workspace_id, pending_records);
         }
 
-        println!(
-            "[Scheduler] Usage records refresh OK: fetched {} records, {} new",
-            total_fetched, total_new
-        );
+        if total_new > 0 {
+            println!("[Refresh] records: +{} (total {})", total_new, total_fetched);
+        }
         Ok(())
     }
 
@@ -380,13 +508,8 @@ impl RefreshScheduler {
         workspace_id: String,
     ) -> Result<(), String> {
         let costs = client.fetch_monthly_costs(&cookies, &workspace_id).await?;
-        println!("[Scheduler] Monthly costs OK: {} entries", costs.len());
         cache.update_with(|snapshot| {
             if snapshot.workspace_id != workspace_id {
-                println!(
-                    "[Scheduler] Ignoring stale monthly costs for {}",
-                    workspace_id
-                );
                 return;
             }
             Self::prepare_workspace(snapshot, &workspace_id);
@@ -403,10 +526,6 @@ impl RefreshScheduler {
 
         cache.update_with(|snapshot| {
             if snapshot.workspace_id != workspace_id {
-                println!(
-                    "[Scheduler] Ignoring stale usage records for {}",
-                    workspace_id
-                );
                 return;
             }
             Self::prepare_workspace(snapshot, workspace_id);
@@ -455,11 +574,11 @@ impl RefreshScheduler {
 
     fn handle_fetch_error(cache: &AppCache, auth_store: &AuthStore, error: String, label: &str) {
         if error == "AUTH_EXPIRED" || error == "REDIRECT_TO_LOGIN" {
-            println!("[Scheduler] Auth expired ({}), clearing cookies", label);
+            println!("[Refresh] Auth expired ({}), clearing cookies", label);
             auth_store.clear_cookies().ok();
             cache.set_error("Session expired. Please log in again.".into());
         } else {
-            println!("[Scheduler] {} fetch error: {}", label, error);
+            println!("[Refresh] {} error: {}", label, error);
             cache.update_with(|snapshot| {
                 if snapshot.error.is_none() {
                     snapshot.error = Some(error);
@@ -475,7 +594,6 @@ impl RefreshScheduler {
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            println!("[Scheduler] Refresh already running; skipping");
             return;
         }
 
@@ -492,17 +610,20 @@ impl RefreshScheduler {
             .map(|handle| handle.clone())
             .unwrap_or(None);
 
-        Self::do_refresh(
-            self.client.clone(),
-            self.cache.clone(),
-            self.auth_store.clone(),
-            self.history_store.clone(),
-            self.is_refreshing.clone(),
-            self.threshold.clone(),
-            self.alerted.clone(),
-            app_handle,
-        )
-        .await;
+        let ctx = RefreshContext {
+            client: self.client.clone(),
+            cache: self.cache.clone(),
+            auth_store: self.auth_store.clone(),
+            history_store: self.history_store.clone(),
+            settings_store: self.settings_store.clone(),
+            notification_rules: self.notification_rules.clone(),
+            threshold_notifications: self.threshold_notifications.clone(),
+            is_refreshing: self.is_refreshing.clone(),
+            threshold: self.threshold.clone(),
+            consecutive_failures: self.consecutive_failures.clone(),
+        };
+
+        Self::do_refresh(ctx, app_handle).await;
     }
 
     /// Notify scheduler that window visibility changed.

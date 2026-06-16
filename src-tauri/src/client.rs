@@ -209,6 +209,14 @@ impl OpenCodeClient {
         };
 
         // Look for arrays that contain objects with `id:` and `name:` (workspace-like)
+        let obj_re = Regex::new(
+            r#"\{id:\s*"([^"]+)",\s*name:\s*"([^"]*)"(?:,\s*slug:\s*(?:null|"([^"]*)"))?\}"#,
+        );
+        let obj_re = match obj_re {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+
         for caps in re.captures_iter(html) {
             let array_content = &caps[1];
             // Check if this looks like a workspace array (has id: "wrk_" pattern)
@@ -221,13 +229,6 @@ impl OpenCodeClient {
             }
 
             let mut workspaces = Vec::new();
-            let obj_re = Regex::new(
-                r#"\{id:\s*"([^"]+)",\s*name:\s*"([^"]*)"(?:,\s*slug:\s*(?:null|"([^"]*)"))?\}"#,
-            );
-            let obj_re = match obj_re {
-                Ok(r) => r,
-                Err(_) => return Vec::new(),
-            };
 
             for obj_caps in obj_re.captures_iter(array_content) {
                 let id = obj_caps[1].to_string();
@@ -240,10 +241,7 @@ impl OpenCodeClient {
                 }
             }
 
-            if !workspaces.is_empty() {
-                println!("[Client] Parsed {} workspaces from HTML", workspaces.len());
-                return workspaces;
-            }
+            return workspaces;
         }
 
         Vec::new()

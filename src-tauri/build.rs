@@ -22,6 +22,12 @@ fn main() {
             "save_settings",
             "set_refresh_intervals",
             "export_data",
+            "send_test_notification",
+            "get_local_data_status",
+            "backup_local_data",
+            "clear_local_data",
+            "open_exports_folder",
+            "run_health_check",
         ]),
     ))
     .expect("failed to run Tauri build script");

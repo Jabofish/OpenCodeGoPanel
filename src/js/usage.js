@@ -4,7 +4,7 @@ const OPENCODE_COST_UNITS_PER_USD = 100000000;
 
 let _usageCostChart = null;
 
-export function renderUsageTab(snapshot, settings) {
+export function renderUsageTab(snapshot, settings, insights) {
   const container = document.getElementById('tab-usage');
   if (!container) return;
 
@@ -57,6 +57,18 @@ export function renderUsageTab(snapshot, settings) {
       '</div>' +
     '</section>';
 
+  // Insight strip (max 1 primary insight)
+  if (insights && insights.messages && insights.messages.length > 0) {
+    const primary = insights.messages.reduce((best, m) => {
+      const prio = { danger: 3, warning: 2, info: 1 };
+      return (prio[m.severity] || 0) > (prio[best.severity] || 0) ? m : best;
+    }, insights.messages[0]);
+    html += '<div class="insight-strip insight-' + primary.severity + '">' +
+      '<span>' + escapeHtml(primary.title) + '</span>' +
+      (primary.metric ? '<strong>' + escapeHtml(primary.metric) + '</strong>' : '') +
+    '</div>';
+  }
+
   html += '<div class="quota-strip">';
   html += buildQuotaPill('Weekly', weekly, 'bar-weekly');
   html += buildQuotaPill('Monthly', monthly, 'bar-monthly');
@@ -64,8 +76,26 @@ export function renderUsageTab(snapshot, settings) {
 
   const budget = settings?.monthlyBudget || 0;
   if (budget > 0) {
-    const totalSpentUnits = (snapshot.daily_costs || []).reduce((sum, c) => sum + (c.totalCost || 0), 0);
-    const totalSpentDollars = totalSpentUnits / OPENCODE_COST_UNITS_PER_USD;
+    // Only sum costs for current month
+    const now = new Date();
+    const nowY = now.getFullYear();
+    const nowM = String(now.getMonth() + 1).padStart(2, '0');
+    const monthPrefix = `${nowY}-${nowM}`;
+    const monthCostUnits = (snapshot.daily_costs || [])
+      .filter(c => (c.date || '').startsWith(monthPrefix))
+      .reduce((sum, c) => sum + (c.totalCost || 0), 0);
+    const totalSpentDollars = monthCostUnits / OPENCODE_COST_UNITS_PER_USD;
+
+    // Debug logging
+    console.log('[Usage] Budget calc:', {
+      nowY, nowM, monthPrefix,
+      dailyCostsCount: (snapshot.daily_costs || []).length,
+      filteredCount: (snapshot.daily_costs || []).filter(c => (c.date || '').startsWith(monthPrefix)).length,
+      monthCostUnits,
+      totalSpentDollars: totalSpentDollars.toFixed(4),
+      budget: (budget / 100).toFixed(2),
+    });
+
     const budgetDollarsValue = budget / 100;
     const pct = Math.round((totalSpentDollars / budgetDollarsValue) * 100);
     const spentDollars = totalSpentDollars.toFixed(4);

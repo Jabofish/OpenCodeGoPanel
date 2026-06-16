@@ -177,6 +177,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the backup_local_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-backup-local-data",
+          "markdownDescription": "Enables the backup_local_data command without any pre-configured scope."
+        },
+        {
           "description": "Enables the clear_auth command without any pre-configured scope.",
           "type": "string",
           "const": "allow-clear-auth",
@@ -187,6 +193,12 @@
           "type": "string",
           "const": "allow-clear-cache",
           "markdownDescription": "Enables the clear_cache command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the clear_local_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clear-local-data",
+          "markdownDescription": "Enables the clear_local_data command without any pre-configured scope."
         },
         {
           "description": "Enables the export_data command without any pre-configured scope.",
@@ -211,6 +223,12 @@
           "type": "string",
           "const": "allow-get-history",
           "markdownDescription": "Enables the get_history command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_local_data_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-local-data-status",
+          "markdownDescription": "Enables the get_local_data_status command without any pre-configured scope."
         },
         {
           "description": "Enables the get_settings command without any pre-configured scope.",
@@ -243,6 +261,12 @@
           "markdownDescription": "Enables the list_workspaces command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_exports_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-exports-folder",
+          "markdownDescription": "Enables the open_exports_folder command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_login_window command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-login-window",
@@ -255,6 +279,12 @@
           "markdownDescription": "Enables the refresh_now command without any pre-configured scope."
         },
         {
+          "description": "Enables the run_health_check command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-run-health-check",
+          "markdownDescription": "Enables the run_health_check command without any pre-configured scope."
+        },
+        {
           "description": "Enables the save_cookies command without any pre-configured scope.",
           "type": "string",
           "const": "allow-save-cookies",
@@ -265,6 +295,12 @@
           "type": "string",
           "const": "allow-save-settings",
           "markdownDescription": "Enables the save_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the send_test_notification command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-send-test-notification",
+          "markdownDescription": "Enables the send_test_notification command without any pre-configured scope."
         },
         {
           "description": "Enables the set_hotkey command without any pre-configured scope.",
@@ -303,6 +339,12 @@
           "markdownDescription": "Enables the switch_workspace command without any pre-configured scope."
         },
         {
+          "description": "Denies the backup_local_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-backup-local-data",
+          "markdownDescription": "Denies the backup_local_data command without any pre-configured scope."
+        },
+        {
           "description": "Denies the clear_auth command without any pre-configured scope.",
           "type": "string",
           "const": "deny-clear-auth",
@@ -313,6 +355,12 @@
           "type": "string",
           "const": "deny-clear-cache",
           "markdownDescription": "Denies the clear_cache command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the clear_local_data command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-clear-local-data",
+          "markdownDescription": "Denies the clear_local_data command without any pre-configured scope."
         },
         {
           "description": "Denies the export_data command without any pre-configured scope.",
@@ -337,6 +385,12 @@
           "type": "string",
           "const": "deny-get-history",
           "markdownDescription": "Denies the get_history command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_local_data_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-local-data-status",
+          "markdownDescription": "Denies the get_local_data_status command without any pre-configured scope."
         },
         {
           "description": "Denies the get_settings command without any pre-configured scope.",
@@ -369,6 +423,12 @@
           "markdownDescription": "Denies the list_workspaces command without any pre-configured scope."
         },
         {
+          "description": "Denies the open_exports_folder command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-exports-folder",
+          "markdownDescription": "Denies the open_exports_folder command without any pre-configured scope."
+        },
+        {
           "description": "Denies the open_login_window command without any pre-configured scope.",
           "type": "string",
           "const": "deny-open-login-window",
@@ -381,6 +441,12 @@
           "markdownDescription": "Denies the refresh_now command without any pre-configured scope."
         },
         {
+          "description": "Denies the run_health_check command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-run-health-check",
+          "markdownDescription": "Denies the run_health_check command without any pre-configured scope."
+        },
+        {
           "description": "Denies the save_cookies command without any pre-configured scope.",
           "type": "string",
           "const": "deny-save-cookies",
@@ -391,6 +457,12 @@
           "type": "string",
           "const": "deny-save-settings",
           "markdownDescription": "Denies the save_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the send_test_notification command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-send-test-notification",
+          "markdownDescription": "Denies the send_test_notification command without any pre-configured scope."
         },
         {
           "description": "Denies the set_hotkey command without any pre-configured scope.",
