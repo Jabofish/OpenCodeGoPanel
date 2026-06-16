@@ -4,13 +4,17 @@ pub mod client;
 pub mod commands;
 pub mod history;
 pub mod models;
+pub mod paths;
 pub mod scheduler;
+pub mod settings_store;
 
 use auth::AuthStore;
 use cache::AppCache;
 use client::OpenCodeClient;
 use history::HistoryStore;
+use paths::get_data_dir;
 use scheduler::RefreshScheduler;
+use settings_store::SettingsStore;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -38,8 +42,11 @@ pub fn run() {
     let auth_store = Arc::new(AuthStore::new(data_dir.clone()));
     println!("[Backend] AuthStore created");
 
-    let history_store = Arc::new(HistoryStore::new(data_dir));
+    let history_store = Arc::new(HistoryStore::new(data_dir.clone()));
     println!("[Backend] HistoryStore created");
+
+    let settings_store = Arc::new(SettingsStore::new(data_dir));
+    println!("[Backend] SettingsStore created");
 
     let client = Arc::new(OpenCodeClient::new().expect("Failed to create HTTP client"));
     println!("[Backend] HTTP Client created");
@@ -60,6 +67,7 @@ pub fn run() {
         .manage(app_cache)
         .manage(auth_store)
         .manage(history_store)
+        .manage(settings_store.clone())
         .manage(scheduler.clone())
         .manage(Arc::new(HotkeyState {
             current: Mutex::new(DEFAULT_HOTKEY.to_string()),
@@ -82,6 +90,10 @@ pub fn run() {
             commands::get_threshold,
             commands::list_workspaces,
             commands::switch_workspace,
+            commands::get_settings,
+            commands::save_settings,
+            commands::set_refresh_intervals,
+            commands::export_data,
         ])
         .plugin(tauri_plugin_window_state::Builder::default().with_filename("opencode-window-state.json").build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -206,21 +218,5 @@ pub fn toggle_main_window(app: &tauri::AppHandle, scheduler: &RefreshScheduler) 
             let _ = window.set_focus();
             scheduler.set_visible(true);
         }
-    }
-}
-
-/// Resolve the OS-specific app data directory for storing cookies.
-fn get_data_dir() -> Option<std::path::PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        std::env::var("APPDATA")
-            .ok()
-            .map(|p| std::path::PathBuf::from(p).join("OpenCodeUsagePanel"))
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        std::env::var("HOME")
-            .ok()
-            .map(|p| std::path::PathBuf::from(p).join(".local/share/opencode-usage-panel"))
     }
 }

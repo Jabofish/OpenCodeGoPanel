@@ -27,6 +27,18 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned) {
       '<div class="settings-title">Refresh</div>' +
       buildToggle('setting-auto-refresh', 'Auto refresh', settings.autoRefresh) +
       buildToggle('setting-compact', 'Compact layout', settings.compactMode) +
+      buildSelect('setting-refresh-visible', 'Visible refresh', String(settings.refreshVisibleSecs || 30), [
+        { value: '15', label: '15s' },
+        { value: '30', label: '30s' },
+        { value: '60', label: '60s' },
+        { value: '300', label: '5m' },
+      ]) +
+      buildSelect('setting-refresh-hidden', 'Hidden refresh', String(settings.refreshHiddenSecs || 600), [
+        { value: '300', label: '5m' },
+        { value: '600', label: '10m' },
+        { value: '1800', label: '30m' },
+        { value: '0', label: 'Off' },
+      ]) +
       buildAction('setting-refresh', 'Refresh now') +
       buildAction('setting-clear-cache', 'Clear cache') +
     '</div>' +
@@ -40,13 +52,21 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned) {
     '</div>' +
     '<div class="settings-group">' +
       '<div class="settings-title">Hotkey</div>' +
-      buildInput('setting-hotkey', 'Toggle panel (Ctrl+Shift+?)', settings.hotkey || 'Ctrl+Shift+U', 'text', 'Ctrl+Shift+U') +
+      buildStatus('Current', escapeHtml(settings.hotkeyRecording ? 'Press shortcut...' : (settings.hotkey || 'Ctrl+Shift+U'))) +
+      buildAction('setting-hotkey-record', settings.hotkeyRecording ? 'Recording...' : 'Record shortcut') +
     '</div>' +
     '<div class="settings-group">' +
       '<div class="settings-title">Account</div>' +
       buildStatus('Workspace', escapeHtml(workspace)) +
-      buildAction('setting-login', 'Log in') + 
+      buildStatus('Workspace ID', escapeHtml(snapshot?.workspace_id || 'Not set')) +
+      buildAction('setting-login', 'Log in') +
       buildAction('setting-clear-auth', 'Clear login') +
+    '</div>' +
+    '<div class="settings-group">' +
+      '<div class="settings-title">Data</div>' +
+      buildAction('setting-export-json', 'Export snapshot JSON') +
+      buildAction('setting-export-records', 'Export usage CSV') +
+      buildAction('setting-export-costs', 'Export costs CSV') +
     '</div>';
 
   bindToggle('setting-pin', (value) => actions.setPinned(value));
@@ -54,20 +74,21 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned) {
   bindToggle('setting-compact', (value) => actions.setCompactMode(value));
   bindToggle('setting-mini-badge', (value) => actions.setMiniBadgeMode(value));
   bindSelect('setting-mini-badge-source', (value) => actions.setMiniBadgeSource(value));
+  bindSelect('setting-refresh-visible', (value) => actions.setRefreshVisibleSecs(parseInt(value, 10)));
+  bindSelect('setting-refresh-hidden', (value) => actions.setRefreshHiddenSecs(parseInt(value, 10)));
   bindAction('setting-refresh', actions.refresh);
   bindAction('setting-clear-cache', actions.clearCache);
   bindAction('setting-login', actions.login);
   bindAction('setting-clear-auth', actions.clearAuth);
   bindAction('setting-minimize', actions.minimize);
   bindAction('setting-hide-to-tray', actions.hideToTray);
+  bindAction('setting-hotkey-record', actions.recordHotkey);
+  bindAction('setting-export-json', () => actions.exportData('snapshot-json'));
+  bindAction('setting-export-records', () => actions.exportData('usage-records-csv'));
+  bindAction('setting-export-costs', () => actions.exportData('daily-costs-csv'));
   bindInput('setting-budget', (value) => {
     const cents = Math.round(parseFloat(value || '0') * 100);
     actions.setBudget(cents >= 0 ? cents : 0);
-  });
-  bindInput('setting-hotkey', (value) => {
-    if (value && value.trim()) {
-      actions.setHotkey(value.trim());
-    }
   });
   bindInput('setting-threshold', (value) => {
     const v = parseInt(value || '0', 10);

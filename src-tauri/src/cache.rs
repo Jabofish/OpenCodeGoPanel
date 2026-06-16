@@ -206,6 +206,16 @@ impl AppCache {
         });
     }
 
+    /// Update just the refresh_state field on the active workspace snapshot.
+    pub fn update_refresh_state<F>(&self, f: F)
+    where
+        F: FnOnce(&mut crate::models::RefreshState),
+    {
+        self.update_with(|snapshot| {
+            f(&mut snapshot.refresh_state);
+        });
+    }
+
     /// Clear cached usage/model data for all workspaces from memory and disk.
     pub fn clear(&self) -> Result<(), String> {
         if let Ok(mut writer) = self.state.write() {

@@ -5,7 +5,7 @@ use crate::history::HistoryStore;
 use crate::models::{AppDataSnapshot, UsageRecord};
 use chrono::Utc;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri_plugin_notification::NotificationExt;
 use tokio::time::Duration;
@@ -27,6 +27,10 @@ pub struct RefreshScheduler {
     alerted: Arc<AtomicBool>,
     /// App handle for sending notifications (set after setup)
     app_handle: Mutex<Option<tauri::AppHandle>>,
+    /// Configurable refresh interval when window is visible (seconds)
+    visible_interval_secs: Arc<AtomicU64>,
+    /// Configurable refresh interval when window is hidden (seconds, 0 = off)
+    hidden_interval_secs: Arc<AtomicU64>,
 }
 
 impl RefreshScheduler {
@@ -47,6 +51,8 @@ impl RefreshScheduler {
             threshold: Arc::new(AtomicU32::new(0)),
             alerted: Arc::new(AtomicBool::new(false)),
             app_handle: Mutex::new(None),
+            visible_interval_secs: Arc::new(AtomicU64::new(30)),
+            hidden_interval_secs: Arc::new(AtomicU64::new(600)),
         }
     }
 
@@ -69,18 +75,33 @@ impl RefreshScheduler {
         self.threshold.load(Ordering::Relaxed)
     }
 
-    /// Start adaptive refresh loop: 30s when visible, 10min when hidden
+    /// Start adaptive refresh loop with configurable intervals.
     pub async fn start_adaptive(&self) {
         loop {
-            if self.is_visible.load(Ordering::Relaxed) {
-                self.refresh_now().await;
-                tokio::time::sleep(Duration::from_secs(30)).await;
+            let visible = self.is_visible.load(Ordering::Relaxed);
+            let secs = if visible {
+                self.visible_interval_secs.load(Ordering::Relaxed)
             } else {
-                // Refresh once when hiding, then go to 10min interval
-                self.refresh_now().await;
-                tokio::time::sleep(Duration::from_secs(600)).await;
+                self.hidden_interval_secs.load(Ordering::Relaxed)
+            };
+
+            if secs == 0 {
+                // Hidden refresh disabled; sleep and re-check visibility
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                continue;
             }
+
+            self.refresh_now().await;
+            tokio::time::sleep(Duration::from_secs(secs)).await;
         }
+    }
+
+    /// Update configurable refresh intervals at runtime.
+    pub fn set_refresh_intervals(&self, visible_secs: u64, hidden_secs: u64) {
+        self.visible_interval_secs
+            .store(visible_secs.clamp(15, 3600), Ordering::Relaxed);
+        self.hidden_interval_secs
+            .store(hidden_secs, Ordering::Relaxed);
     }
 
     async fn do_refresh(
@@ -99,6 +120,12 @@ impl RefreshScheduler {
             None => {
                 println!("[Scheduler] No cookies found, setting error");
                 cache.set_error("Not logged in".into());
+                cache.update_refresh_state(|rs| {
+                    rs.is_refreshing = false;
+                    rs.phase = "error".into();
+                    rs.last_finished_at = Some(Utc::now().to_rfc3339());
+                    rs.last_error = Some("Not logged in".into());
+                });
                 is_refreshing.store(false, Ordering::Release);
                 return;
             }
@@ -118,6 +145,7 @@ impl RefreshScheduler {
         });
 
         println!("[Scheduler] Fetching basic usage first...");
+        cache.update_refresh_state(|rs| rs.phase = "usage".into());
         match client.fetch_usage(&cookies, &workspace_id).await {
             Ok((u, workspaces)) => {
                 println!(
@@ -173,6 +201,12 @@ impl RefreshScheduler {
                 println!("[Scheduler] Auth expired, clearing cookies");
                 auth_store.clear_cookies().ok();
                 cache.set_error("Session expired. Please log in again.".into());
+                cache.update_refresh_state(|rs| {
+                    rs.is_refreshing = false;
+                    rs.phase = "error".into();
+                    rs.last_finished_at = Some(Utc::now().to_rfc3339());
+                    rs.last_error = Some(e);
+                });
                 is_refreshing.store(false, Ordering::Release);
                 return;
             }
@@ -189,8 +223,12 @@ impl RefreshScheduler {
                         return;
                     }
                     if snapshot.error.is_none() {
-                        snapshot.error = Some(e);
+                        snapshot.error = Some(e.clone());
                     }
+                    snapshot.refresh_state.is_refreshing = false;
+                    snapshot.refresh_state.phase = "error".into();
+                    snapshot.refresh_state.last_finished_at = Some(Utc::now().to_rfc3339());
+                    snapshot.refresh_state.last_error = Some(e.clone());
                     snapshot.last_updated = Utc::now().to_rfc3339();
                 });
                 is_refreshing.store(false, Ordering::Release);
@@ -200,11 +238,7 @@ impl RefreshScheduler {
 
         println!("[Scheduler] Basic usage cached; continuing slow data refresh in background");
 
-        // Record today's snapshot into history
-        {
-            let snapshot = cache.get();
-            history_store.record(&snapshot);
-        }
+        cache.update_refresh_state(|rs| rs.phase = "records".into());
 
         let records_client = client.clone();
         let records_cache = cache.clone();
@@ -216,6 +250,7 @@ impl RefreshScheduler {
         let costs_workspace_id = workspace_id.clone();
         let costs_cookies = cookies.clone();
         let costs_auth = auth_store.clone();
+        let records_history = history_store.clone();
 
         tokio::spawn(async move {
             let records = Self::refresh_usage_records_incremental(
@@ -230,6 +265,8 @@ impl RefreshScheduler {
                 Self::handle_fetch_error(&records_cache, &auth_store, e, "usage records");
             }
 
+            records_cache.update_refresh_state(|rs| rs.phase = "costs".into());
+
             let costs = Self::refresh_monthly_costs(
                 costs_client,
                 costs_cache.clone(),
@@ -243,6 +280,15 @@ impl RefreshScheduler {
             }
 
             println!("[Scheduler] Slow data refresh complete");
+            {
+                let snapshot = records_cache.get();
+                records_history.record(&snapshot);
+            }
+            records_cache.update_refresh_state(|rs| {
+                rs.is_refreshing = false;
+                rs.phase = "done".into();
+                rs.last_finished_at = Some(Utc::now().to_rfc3339());
+            });
             is_refreshing.store(false, Ordering::Release);
         });
     }
@@ -432,6 +478,13 @@ impl RefreshScheduler {
             println!("[Scheduler] Refresh already running; skipping");
             return;
         }
+
+        self.cache.update_refresh_state(|rs| {
+            rs.is_refreshing = true;
+            rs.phase = "auth".into();
+            rs.last_started_at = Some(Utc::now().to_rfc3339());
+            rs.last_error = None;
+        });
 
         let app_handle = self
             .app_handle

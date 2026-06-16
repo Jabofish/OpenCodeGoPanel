@@ -2,6 +2,7 @@ import { formatTimeAgo } from './format.js';
 import { renderUsageTab } from './usage.js';
 import { renderModelsTab } from './models.js';
 import { renderSettingsTab } from './settings.js';
+import { renderTrendsTab } from './trends.js';
 
 // Check if Tauri API is available
 if (!window.__TAURI__) {
@@ -29,8 +30,49 @@ let isPinned = true;
 let refreshTimer = null;
 let snapshotTimer = null;
 let latestSnapshot = null;
+let latestRefreshState = null;
 let settings = loadSettings();
 let miniBadgeExpanded = false;
+let lastManualRefreshAt = 0;
+let workspaceSwitchState = {
+  switching: false,
+  previousId: '',
+  error: null,
+};
+
+let modelView = {
+  query: '',
+  sortBy: 'calls',
+  showAll: false,
+};
+
+const modelActions = {
+  setQuery: (query) => {
+    modelView = { ...modelView, query };
+    renderModelsTab(latestSnapshot, modelView);
+  },
+  setSortBy: (sortBy) => {
+    modelView = { ...modelView, sortBy };
+    renderModelsTab(latestSnapshot, modelView);
+  },
+  toggleShowAll: () => {
+    modelView = { ...modelView, showAll: !modelView.showAll };
+    renderModelsTab(latestSnapshot, modelView);
+  },
+};
+// Expose for models.js event binding
+window._modelActions = modelActions;
+
+let latestHistory = [];
+let historyDays = 30;
+
+const trendActions = {
+  setHistoryDays: async (days) => {
+    historyDays = days;
+    latestHistory = await fetchHistory(days);
+    renderTrendsTab(latestHistory, latestSnapshot, settings, trendActions, historyDays);
+  },
+};
 
 const MINI_BADGE_SIZE = { width: 60, height: 60 };
 const PANEL_MIN_SIZE = { width: 280, height: 320 };
@@ -61,6 +103,25 @@ const settingActions = {
       alert('Failed to set threshold: ' + e);
     }
   },
+  setRefreshVisibleSecs: async (value) => {
+    updateSettings({ refreshVisibleSecs: value });
+    try {
+      await invoke('set_refresh_intervals', {
+        visibleSecs: settings.refreshVisibleSecs,
+        hiddenSecs: settings.refreshHiddenSecs,
+      });
+    } catch (e) { console.warn('[Refresh] set_refresh_intervals failed:', e); }
+  },
+  setRefreshHiddenSecs: async (value) => {
+    updateSettings({ refreshHiddenSecs: value });
+    try {
+      await invoke('set_refresh_intervals', {
+        visibleSecs: settings.refreshVisibleSecs,
+        hiddenSecs: settings.refreshHiddenSecs,
+      });
+    } catch (e) { console.warn('[Refresh] set_refresh_intervals failed:', e); }
+  },
+  recordHotkey: async () => startHotkeyRecording(),
   refresh: async () => {
     await triggerRefresh();
     await renderAll();
@@ -70,27 +131,105 @@ const settingActions = {
   clearCache: async () => clearCache(),
   hideToTray: async () => hideToTray(),
   minimize: async () => minimizeWindow(),
+  exportData: async (kind) => {
+    try {
+      const path = await invoke('export_data', { kind });
+      alert('Exported to: ' + path);
+    } catch (e) {
+      alert('Export failed: ' + e);
+    }
+  },
 };
+
+function defaultSettings() {
+  return {
+    autoRefresh: true,
+    compactMode: true,
+    miniBadgeMode: false,
+    miniBadgeSource: 'auto',
+    monthlyBudget: 6000,
+    hotkey: 'Ctrl+Shift+U',
+    usageThreshold: 80,
+    refreshVisibleSecs: 30,
+    refreshHiddenSecs: 600,
+  };
+}
 
 function loadSettings() {
   try {
     return {
-      autoRefresh: true,
-      compactMode: true,
-      miniBadgeMode: false,
-      miniBadgeSource: 'auto',
-      monthlyBudget: 6000,
-      hotkey: 'Ctrl+Shift+U',
-      usageThreshold: 80,
+      ...defaultSettings(),
       ...JSON.parse(localStorage.getItem('ocp-settings') || '{}'),
     };
   } catch (_) {
-    return { autoRefresh: true, compactMode: true, miniBadgeMode: false, miniBadgeSource: 'auto', monthlyBudget: 6000, hotkey: 'Ctrl+Shift+U', usageThreshold: 80 };
+    return defaultSettings();
+  }
+}
+
+async function loadSettingsFromBackend() {
+  const fallback = {
+    ...defaultSettings(),
+    ...JSON.parse(localStorage.getItem('ocp-settings') || '{}'),
+  };
+  if (!invoke) return fallback;
+  try {
+    const backendSettings = await invoke('get_settings');
+    const migrated = { ...fallback, ...backendSettings };
+    // Persist migrated settings to backend and mark migration done
+    await invoke('save_settings', { next: migrated });
+    localStorage.setItem('ocp-settings-migrated', '1');
+    // Sync refresh intervals to scheduler
+    await invoke('set_refresh_intervals', {
+      visibleSecs: migrated.refreshVisibleSecs,
+      hiddenSecs: migrated.refreshHiddenSecs,
+    }).catch(() => {});
+    return migrated;
+  } catch (e) {
+    console.warn('[Settings] Backend settings unavailable, using localStorage:', e);
+    return fallback;
   }
 }
 
 function saveSettings() {
   localStorage.setItem('ocp-settings', JSON.stringify(settings));
+  if (invoke) {
+    invoke('save_settings', { next: settings })
+      .catch(e => console.warn('[Settings] Failed to persist backend settings:', e));
+  }
+}
+
+function startHotkeyRecording() {
+  const previous = settings.hotkey || 'Ctrl+Shift+U';
+  settings.hotkeyRecording = true;
+  // Update settings UI to show recording state
+  renderSettingsTab(latestSnapshot, settings, settingActions, isPinned);
+
+  const onKeyDown = async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    document.removeEventListener('keydown', onKeyDown, true);
+
+    const key = event.key?.toUpperCase();
+    if (!event.ctrlKey || !event.shiftKey || !key || key.length !== 1 || !/^[A-Z]$/.test(key)) {
+      alert('Use Ctrl+Shift plus a letter A-Z.');
+      delete settings.hotkeyRecording;
+      updateSettings({ hotkey: previous });
+      return;
+    }
+
+    const hotkey = 'Ctrl+Shift+' + key;
+    try {
+      await invoke('set_hotkey', { hotkey });
+      delete settings.hotkeyRecording;
+      updateSettings({ hotkey });
+    } catch (e) {
+      alert('Failed to set hotkey: ' + e);
+      delete settings.hotkeyRecording;
+      updateSettings({ hotkey: previous });
+    }
+  };
+
+  document.addEventListener('keydown', onKeyDown, true);
 }
 
 function updateSettings(next) {
@@ -311,6 +450,7 @@ function updateMiniBadge(snapshot) {
   const percentEl = document.getElementById('mini-badge-percent');
   const labelEl = document.getElementById('mini-badge-label');
   const indicatorEl = document.getElementById('mini-badge-indicator');
+  const miniBadge = document.getElementById('mini-badge');
   if (!percentEl || !labelEl || !indicatorEl) return;
 
   const rollingPct = snapshot.usage?.rolling?.usage_percent ?? 0;
@@ -344,7 +484,13 @@ function updateMiniBadge(snapshot) {
   }
 
   percentEl.textContent = percentage + '%';
+  percentEl.classList.toggle('three-digit', percentage >= 100);
   labelEl.textContent = label;
+
+  // Set title attribute on mini badge for accessibility
+  if (miniBadge) {
+    miniBadge.title = label + ' usage: ' + percentage + '%';
+  }
 
   indicatorEl.classList.remove('warning', 'danger');
   if (percentage >= settings.usageThreshold) {
@@ -399,13 +545,37 @@ async function openLoginWindow() {
 }
 
 async function triggerRefresh() {
+  const now = Date.now();
+  const cooldownMs = 10000; // 10s cooldown for manual refresh
+  if (now - lastManualRefreshAt < cooldownMs) {
+    console.log('[Refresh] Cooldown active, skipping manual refresh');
+    return;
+  }
+  lastManualRefreshAt = now;
+
   console.log('[Refresh] Triggering refresh...');
   try {
     if (!invoke) return;
+    // Immediately show refreshing state
+    const btn = document.getElementById('btn-refresh');
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = 'Refreshing';
+    }
     await invoke('refresh_now');
     console.log('[Refresh] Refresh triggered');
   } catch (e) {
     console.error('[Refresh] Refresh failed:', e);
+  }
+}
+
+async function fetchHistory(days = 30) {
+  try {
+    if (!invoke) return [];
+    return await invoke('get_history', { days });
+  } catch (e) {
+    console.warn('[History] Failed:', e);
+    return [];
   }
 }
 
@@ -475,23 +645,60 @@ async function renderAll() {
 
 function applySnapshot(snapshot) {
   latestSnapshot = snapshot;
+  latestRefreshState = snapshot.refresh_state || null;
   updateFooter(snapshot);
+  updateRefreshButton(snapshot);
   updateMiniBadge(snapshot);
   renderUsageTab(snapshot, settings);
-  renderModelsTab(snapshot);
+  renderModelsTab(snapshot, modelView);
+  renderTrendsTab(latestHistory, snapshot, settings, trendActions, historyDays);
   renderSettingsTab(snapshot, settings, settingActions, isPinned);
   loadWorkspaces();
 }
 
 function updateFooter(snapshot) {
   const footer = document.getElementById('footer-time');
-  if (snapshot.error && snapshot.error.includes('Not logged in')) {
-    footer.textContent = 'Not logged in';
+  if (!footer) return;
+
+  // Workspace switch takes priority
+  if (workspaceSwitchState.switching) {
+    footer.textContent = 'Switching workspace...';
+    return;
+  }
+  if (workspaceSwitchState.error) {
+    footer.textContent = 'Workspace switch failed';
+    return;
+  }
+
+  // Refresh state messages
+  const rs = snapshot.refresh_state;
+  if (rs && rs.is_refreshing) {
+    const phaseLabels = {
+      auth: 'Refreshing auth...',
+      usage: 'Refreshing usage...',
+      records: 'Refreshing records...',
+      costs: 'Refreshing costs...',
+    };
+    footer.textContent = phaseLabels[rs.phase] || 'Refreshing...';
+    return;
+  }
+
+  // Auth error
+  if (snapshot.error && (snapshot.error.includes('Not logged in') || snapshot.error.includes('Session expired'))) {
+    footer.textContent = 'Login required';
   } else if (snapshot.error) {
-    footer.textContent = 'Update failed';
+    footer.textContent = 'Update failed · using cached data';
   } else {
     footer.textContent = 'Updated ' + formatTimeAgo(snapshot.last_updated);
   }
+}
+
+function updateRefreshButton(snapshot) {
+  const btn = document.getElementById('btn-refresh');
+  if (!btn) return;
+  const refreshing = !!(snapshot.refresh_state && snapshot.refresh_state.is_refreshing);
+  btn.disabled = refreshing;
+  btn.textContent = refreshing ? 'Refreshing' : 'Refresh';
 }
 
 // --- Workspace Switching ---
@@ -525,14 +732,33 @@ function setupWorkspaceSelector() {
   sel.addEventListener('change', async () => {
     const wid = sel.value;
     if (!wid) return;
+
+    workspaceSwitchState.previousId = latestSnapshot?.workspace_id || '';
+    workspaceSwitchState.switching = true;
+    workspaceSwitchState.error = null;
+
+    // Show immediate feedback
+    const footer = document.getElementById('footer-time');
+    if (footer) footer.textContent = 'Switching workspace...';
+
     try {
       console.log('[Workspace] Switching to:', wid);
       await invoke('switch_workspace', { workspaceId: wid });
       console.log('[Workspace] Switched OK, showing cached data and refreshing...');
+      workspaceSwitchState.switching = false;
       await renderAll();
       setTimeout(() => renderAll().catch(e => console.warn('[Workspace] Follow-up render failed:', e)), 700);
     } catch (e) {
       console.error('[Workspace] Switch failed:', e);
+      workspaceSwitchState.switching = false;
+      workspaceSwitchState.error = String(e);
+      // Restore previous selection
+      sel.value = workspaceSwitchState.previousId;
+      // Clear error after a few seconds
+      setTimeout(() => {
+        workspaceSwitchState.error = null;
+        applySnapshot(latestSnapshot);
+      }, 5000);
     }
   });
 }
@@ -543,6 +769,12 @@ function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
   if (name === 'settings') renderSettingsTab(latestSnapshot, settings, settingActions, isPinned);
+  if (name === 'trends') {
+    fetchHistory(historyDays).then(history => {
+      latestHistory = history;
+      renderTrendsTab(latestHistory, latestSnapshot, settings, trendActions, historyDays);
+    });
+  }
 }
 
 // --- Window Controls ---
@@ -633,6 +865,9 @@ async function init() {
   console.log('[Init] Starting application...');
 
   try {
+    // Load settings from backend, falling back to localStorage
+    settings = await loadSettingsFromBackend();
+
     setupTabs();
     console.log('[Init] Tabs setup complete');
 
@@ -650,6 +885,16 @@ async function init() {
       } catch (e) {
         console.warn('[Init] Failed to sync threshold:', e);
       }
+    }
+
+    // Sync refresh intervals to scheduler
+    try {
+      await invoke('set_refresh_intervals', {
+        visibleSecs: settings.refreshVisibleSecs || 30,
+        hiddenSecs: settings.refreshHiddenSecs || 600,
+      });
+    } catch (e) {
+      console.warn('[Init] set_refresh_intervals not available:', e);
     }
 
     // Add F12 for dev tools in debug mode

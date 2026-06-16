@@ -9,6 +9,7 @@ fn main() {
             "clear_auth",
             "clear_cache",
             "hide_to_tray",
+            "set_mini_badge_window",
             "open_login_window",
             "extract_cookies_from_webview",
             "get_history",
@@ -17,6 +18,10 @@ fn main() {
             "get_threshold",
             "list_workspaces",
             "switch_workspace",
+            "get_settings",
+            "save_settings",
+            "set_refresh_intervals",
+            "export_data",
         ]),
     ))
     .expect("failed to run Tauri build script");

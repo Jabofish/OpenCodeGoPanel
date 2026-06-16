@@ -100,6 +100,16 @@ pub struct WorkspaceEntry {
     pub slug: Option<String>,
 }
 
+/// Current state of the backend refresh cycle
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefreshState {
+    pub is_refreshing: bool,
+    pub phase: String,
+    pub last_started_at: Option<String>,
+    pub last_finished_at: Option<String>,
+    pub last_error: Option<String>,
+}
+
 /// Snapshot of all cached data sent to frontend
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppDataSnapshot {
@@ -114,6 +124,8 @@ pub struct AppDataSnapshot {
     pub daily_costs: Vec<DailyCostEntry>,
     /// Workspaces available to the current user
     pub workspaces: Vec<WorkspaceEntry>,
+    /// Backend refresh cycle state
+    pub refresh_state: RefreshState,
 }
 
 impl AppDataSnapshot {
@@ -146,6 +158,13 @@ impl AppDataSnapshot {
             usage_records: vec![],
             daily_costs: vec![],
             workspaces: vec![],
+            refresh_state: RefreshState {
+                is_refreshing: false,
+                phase: "idle".into(),
+                last_started_at: None,
+                last_finished_at: None,
+                last_error: None,
+            },
         }
     }
 }
