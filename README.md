@@ -11,6 +11,23 @@ A compact Windows desktop panel for monitoring OpenCode Go usage.
 - Uses the OpenCode web login flow and stores cookies locally.
 - **New:** Mini badge mode with double-click expansion for compact desktop presence.
 
+## Release 0.0.5
+
+- **Persistent Settings Store:** All user preferences now survive app restarts via Tauri's `plugin-persisted-store` — no more lost configurations.
+- **Trends Tab:** New third tab with 7/30/90-day rolling line charts for rolling/weekly/monthly quota percentages, plus period cost summary.
+- **Usage Insights Engine:** `insights.js` derives actionable alerts — budget projection pacing, cost spike detection, quota threshold warnings, and 7-day trend surge analysis.
+- **Quick Peek Overlay:** Press any hotkey to summon a compact overlay showing rolling percent, month cost, projected cost, and quick actions (refresh, switch tabs, jump workspaces).
+- **Interactive Hotkey Recording:** Record custom shortcuts in Settings with real-time key capture (press any combo to set, Esc to cancel).
+- **Data Export:** Export usage history, model statistics, and daily costs to CSV from the Settings tab. All exports open in your OS file manager.
+- **Configurable Refresh Intervals:** Adjust auto-refresh rates separately for visible (15s-60s) and hidden (5m-30m) windows. Option to disable background refresh entirely.
+- **Manual Refresh with Spinner:** New refresh button with loading state and inline feedback — no more guessing when data is stale.
+- **Notification Rules:** Fine-grained alert controls — quota warnings, budget projection pacing, refresh failures, configurable quiet hours (22:00-08:00), and cooldown periods.
+- **Workspace Profiles:** Rename workspaces with custom aliases, mark favorites, and set per-workspace mini-badge source preferences.
+- **Local Data Management:** Backup/restore all local data (settings, history), view storage usage, and selectively clear exports or history.
+- **Model Filtering:** Filter the Models tab by name for quick lookup of specific models.
+- **Toast Notification System:** Consistent non-intrusive user feedback for actions and errors.
+- **Enhanced Empty States:** Better UX and copy when no data is available.
+
 ## Release 0.0.4
 
 - **Smart pointer-watch auto-collapse:** The expanded mini badge now tracks the actual cursor position instead of a blind timer — stays open as long as the pointer remains inside the full panel, and collapses ~180 ms after the pointer leaves. This makes editing settings or glancing at details much more reliable.
