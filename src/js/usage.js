@@ -8,7 +8,8 @@ export function renderUsageTab(snapshot, settings, insights) {
   const container = document.getElementById('tab-usage');
   if (!container) return;
 
-  const u = snapshot.usage;
+  snapshot = snapshot || {};
+  const u = snapshot.usage || {};
   const rolling = u.rolling || {};
   const weekly = u.weekly || {};
   const monthly = u.monthly || {};
@@ -81,16 +82,17 @@ export function renderUsageTab(snapshot, settings, insights) {
     const nowY = now.getFullYear();
     const nowM = String(now.getMonth() + 1).padStart(2, '0');
     const monthPrefix = `${nowY}-${nowM}`;
-    const monthCostUnits = (snapshot.daily_costs || [])
-      .filter(c => (c.date || '').startsWith(monthPrefix))
+    const dailyCosts = snapshot.daily_costs || [];
+    const monthCosts = dailyCosts.filter(c => (c.date || '').startsWith(monthPrefix));
+    const monthCostUnits = monthCosts
       .reduce((sum, c) => sum + (c.totalCost || 0), 0);
     const totalSpentDollars = monthCostUnits / OPENCODE_COST_UNITS_PER_USD;
 
     // Debug logging
     console.log('[Usage] Budget calc:', {
       nowY, nowM, monthPrefix,
-      dailyCostsCount: (snapshot.daily_costs || []).length,
-      filteredCount: (snapshot.daily_costs || []).filter(c => (c.date || '').startsWith(monthPrefix)).length,
+      dailyCostsCount: dailyCosts.length,
+      filteredCount: monthCosts.length,
       monthCostUnits,
       totalSpentDollars: totalSpentDollars.toFixed(4),
       budget: (budget / 100).toFixed(2),
@@ -161,7 +163,7 @@ function renderCostChart(snapshot) {
     _usageCostChart = null;
   }
 
-  const costs = snapshot.daily_costs || [];
+  const costs = snapshot?.daily_costs || [];
   const totalEl = document.getElementById('cost-chart-total');
   const canvas = document.getElementById('usage-cost-chart');
 
@@ -178,8 +180,16 @@ function renderCostChart(snapshot) {
     return;
   }
 
+  if (typeof Chart === 'undefined') {
+    console.warn('[Usage] Chart.js not available');
+    if (totalEl) totalEl.textContent = '';
+    if (canvas) canvas.style.display = 'none';
+    return;
+  }
+
+  if (!canvas) return;
   if (canvas) canvas.style.display = 'block';
-  const leftover = canvas.parentElement.querySelector('.cost-chart-empty');
+  const leftover = canvas.parentElement?.querySelector('.cost-chart-empty');
   if (leftover) leftover.remove();
 
   const byDate = new Map();
@@ -197,7 +207,6 @@ function renderCostChart(snapshot) {
   const total = data.reduce((s, v) => s + v, 0);
   if (totalEl) totalEl.textContent = '$' + total.toFixed(2);
 
-  if (!canvas) return;
   _usageCostChart = new Chart(canvas, {
     type: 'bar',
     data: {

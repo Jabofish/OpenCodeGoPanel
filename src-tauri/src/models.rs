@@ -192,5 +192,22 @@ pub struct HealthCheck {
     pub settings_ok: bool,
     pub history_ok: bool,
     pub data_dir: String,
+    pub data_dir_exists: bool,
+    pub data_dir_available: bool,
+    pub data_dir_error: Option<String>,
+    pub cache_file: DataFileHealth,
+    pub settings_file: DataFileHealth,
+    pub history_file: DataFileHealth,
+    pub auth_file: DataFileHealth,
     pub last_refresh_error: Option<String>,
+}
+
+/// Diagnostic details for one local data file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataFileHealth {
+    pub exists: bool,
+    pub readable: bool,
+    pub bytes: u64,
+    pub error: Option<String>,
 }

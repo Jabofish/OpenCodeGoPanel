@@ -1,6 +1,8 @@
+use chrono::Timelike;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use chrono::Timelike;
+
+const MINUTES_PER_DAY: u32 = 24 * 60;
 
 /// State for time-based cooldown notifications (e.g., budget exceeded, cost spike)
 pub struct NotificationRuleState {
@@ -121,28 +123,22 @@ impl ThresholdNotificationState {
 /// Supports cross-midnight ranges (e.g., 22:00-08:00).
 pub fn is_in_quiet_hours(start: &str, end: &str) -> bool {
     let now = chrono::Local::now().time();
-    let parse = |s: &str| -> Option<(u32, u32)> {
-        let parts: Vec<&str> = s.split(':').collect();
-        if parts.len() != 2 {
-            return None;
-        }
-        let h = parts[0].parse::<u32>().ok()?;
-        let m = parts[1].parse::<u32>().ok()?;
-        Some((h, m))
-    };
-
-    let (sh, sm) = match parse(start) {
-        Some(v) => v,
-        None => return false,
-    };
-    let (eh, em) = match parse(end) {
-        Some(v) => v,
-        None => return false,
-    };
-
-    let start_mins = sh * 60 + sm;
-    let end_mins = eh * 60 + em;
     let now_mins = now.hour() * 60 + now.minute();
+    is_in_quiet_hours_at(start, end, now_mins)
+}
+
+fn is_in_quiet_hours_at(start: &str, end: &str, now_mins: u32) -> bool {
+    let start_mins = match parse_time_to_minutes(start) {
+        Some(v) => v,
+        None => return false,
+    };
+    let end_mins = match parse_time_to_minutes(end) {
+        Some(v) => v,
+        None => return false,
+    };
+    if now_mins >= MINUTES_PER_DAY || start_mins == end_mins {
+        return false;
+    }
 
     if start_mins <= end_mins {
         // Same day: e.g. 08:00-22:00
@@ -153,22 +149,43 @@ pub fn is_in_quiet_hours(start: &str, end: &str) -> bool {
     }
 }
 
+fn parse_time_to_minutes(value: &str) -> Option<u32> {
+    let (hours, minutes) = value.trim().split_once(':')?;
+    let hours = hours.parse::<u32>().ok()?;
+    let minutes = minutes.parse::<u32>().ok()?;
+    if hours >= 24 || minutes >= 60 {
+        return None;
+    }
+    Some(hours * 60 + minutes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn quiet_hours_same_day() {
-        // 08:00-22:00 — outside at 07:00, inside at 12:00
-        // Can't test precisely without mocking time, but test the logic
-        assert_eq!(is_in_quiet_hours("08:00", "10:00"), false); // depends on current time
+    fn quiet_hours_same_day_is_deterministic() {
+        assert!(!is_in_quiet_hours_at("08:00", "10:00", 7 * 60 + 59));
+        assert!(is_in_quiet_hours_at("08:00", "10:00", 8 * 60));
+        assert!(is_in_quiet_hours_at("08:00", "10:00", 9 * 60 + 59));
+        assert!(!is_in_quiet_hours_at("08:00", "10:00", 10 * 60));
     }
 
     #[test]
-    fn quiet_hours_cross_midnight_always_consistent() {
-        // 22:00-08:00 — should either be inside or outside based on time
-        let result = is_in_quiet_hours("22:00", "08:00");
-        // Just ensure it doesn't panic
-        assert!(result == true || result == false);
+    fn quiet_hours_cross_midnight_is_deterministic() {
+        assert!(!is_in_quiet_hours_at("22:00", "08:00", 21 * 60 + 59));
+        assert!(is_in_quiet_hours_at("22:00", "08:00", 22 * 60));
+        assert!(is_in_quiet_hours_at("22:00", "08:00", 2 * 60));
+        assert!(!is_in_quiet_hours_at("22:00", "08:00", 8 * 60));
+    }
+
+    #[test]
+    fn quiet_hours_rejects_invalid_ranges() {
+        assert_eq!(parse_time_to_minutes("23:59"), Some(23 * 60 + 59));
+        assert_eq!(parse_time_to_minutes("24:00"), None);
+        assert_eq!(parse_time_to_minutes("12:60"), None);
+        assert!(!is_in_quiet_hours_at("08:00", "08:00", 8 * 60));
+        assert!(!is_in_quiet_hours_at("bad", "08:00", 2 * 60));
+        assert!(!is_in_quiet_hours_at("22:00", "08:00", MINUTES_PER_DAY));
     }
 }

@@ -15,6 +15,10 @@ use tokio::time::Duration;
 const USAGE_PAGE_SIZE: usize = 50;
 const MAX_USAGE_PAGES: u32 = 10_000;
 const USAGE_UPDATE_EVERY_PAGES: u32 = 5;
+const DEFAULT_VISIBLE_INTERVAL_SECS: u64 = 30;
+const MIN_VISIBLE_INTERVAL_SECS: u64 = 15;
+const MIN_HIDDEN_INTERVAL_SECS: u64 = 60;
+const MAX_REFRESH_INTERVAL_SECS: u64 = 3600;
 
 /// Bundled Arcs passed into `do_refresh` to keep the argument count reasonable.
 struct RefreshContext {
@@ -63,6 +67,7 @@ impl RefreshScheduler {
         settings_store: Arc<SettingsStore>,
         is_visible: Arc<AtomicBool>,
     ) -> Self {
+        let settings = settings_store.get();
         Self {
             client,
             cache,
@@ -76,8 +81,12 @@ impl RefreshScheduler {
             threshold: Arc::new(AtomicU32::new(0)),
             alerted: Arc::new(AtomicBool::new(false)),
             app_handle: Mutex::new(None),
-            visible_interval_secs: Arc::new(AtomicU64::new(30)),
-            hidden_interval_secs: Arc::new(AtomicU64::new(600)),
+            visible_interval_secs: Arc::new(AtomicU64::new(normalize_visible_interval(
+                settings.refresh_visible_secs,
+            ))),
+            hidden_interval_secs: Arc::new(AtomicU64::new(normalize_hidden_interval(
+                settings.refresh_hidden_secs,
+            ))),
             consecutive_failures: Arc::new(AtomicU32::new(0)),
         }
     }
@@ -126,15 +135,12 @@ impl RefreshScheduler {
     /// Update configurable refresh intervals at runtime.
     pub fn set_refresh_intervals(&self, visible_secs: u64, hidden_secs: u64) {
         self.visible_interval_secs
-            .store(visible_secs.clamp(15, 3600), Ordering::Relaxed);
+            .store(normalize_visible_interval(visible_secs), Ordering::Relaxed);
         self.hidden_interval_secs
-            .store(hidden_secs, Ordering::Relaxed);
+            .store(normalize_hidden_interval(hidden_secs), Ordering::Relaxed);
     }
 
-    async fn do_refresh(
-        ctx: RefreshContext,
-        app_handle: Option<tauri::AppHandle>,
-    ) {
+    async fn do_refresh(ctx: RefreshContext, app_handle: Option<tauri::AppHandle>) {
         let stored = match ctx.auth_store.load_cookies() {
             Some(s) => s,
             None => {
@@ -158,7 +164,8 @@ impl RefreshScheduler {
             snapshot.last_updated = Utc::now().to_rfc3339();
         });
 
-        ctx.cache.update_refresh_state(|rs| rs.phase = "usage".into());
+        ctx.cache
+            .update_refresh_state(|rs| rs.phase = "usage".into());
         match ctx.client.fetch_usage(&cookies, &workspace_id).await {
             Ok((u, workspaces)) => {
                 println!(
@@ -204,7 +211,8 @@ impl RefreshScheduler {
                             ("Weekly", u.weekly.usage_percent),
                             ("Monthly", u.monthly.usage_percent),
                         ] {
-                            let (should_notify, _) = ctx.threshold_notifications
+                            let (should_notify, _) = ctx
+                                .threshold_notifications
                                 .should_notify_threshold(&workspace_id, period, pct, thresh);
                             if should_notify {
                                 if let Some(ref handle) = app_handle {
@@ -234,7 +242,8 @@ impl RefreshScheduler {
             Err(e) if e == "AUTH_EXPIRED" || e == "REDIRECT_TO_LOGIN" => {
                 println!("[Refresh] Auth expired, clearing cookies");
                 ctx.auth_store.clear_cookies().ok();
-                ctx.cache.set_error("Session expired. Please log in again.".into());
+                ctx.cache
+                    .set_error("Session expired. Please log in again.".into());
                 ctx.cache.update_refresh_state(|rs| {
                     rs.is_refreshing = false;
                     rs.phase = "error".into();
@@ -266,7 +275,8 @@ impl RefreshScheduler {
             }
         }
 
-        ctx.cache.update_refresh_state(|rs| rs.phase = "records".into());
+        ctx.cache
+            .update_refresh_state(|rs| rs.phase = "records".into());
 
         let records_client = ctx.client.clone();
         let records_cache = ctx.cache.clone();
@@ -353,7 +363,8 @@ impl RefreshScheduler {
                         };
 
                         if actual_pct >= 100.0 {
-                            let key = format!("budget_exceeded:{}:{}", records_workspace_id, now_ym);
+                            let key =
+                                format!("budget_exceeded:{}:{}", records_workspace_id, now_ym);
                             if spawn_notify_rules.should_send(&key, cooldown) {
                                 if let Some(ref handle) = spawn_app_handle {
                                     let _ = handle
@@ -496,7 +507,10 @@ impl RefreshScheduler {
         }
 
         if total_new > 0 {
-            println!("[Refresh] records: +{} (total {})", total_new, total_fetched);
+            println!(
+                "[Refresh] records: +{} (total {})",
+                total_new, total_fetched
+            );
         }
         Ok(())
     }
@@ -629,5 +643,36 @@ impl RefreshScheduler {
     /// Notify scheduler that window visibility changed.
     pub fn set_visible(&self, visible: bool) {
         self.is_visible.store(visible, Ordering::Relaxed);
+    }
+}
+
+fn normalize_visible_interval(secs: u64) -> u64 {
+    if secs == 0 {
+        DEFAULT_VISIBLE_INTERVAL_SECS
+    } else {
+        secs.clamp(MIN_VISIBLE_INTERVAL_SECS, MAX_REFRESH_INTERVAL_SECS)
+    }
+}
+
+fn normalize_hidden_interval(secs: u64) -> u64 {
+    if secs == 0 {
+        0
+    } else {
+        secs.clamp(MIN_HIDDEN_INTERVAL_SECS, MAX_REFRESH_INTERVAL_SECS)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refresh_interval_normalization_keeps_safe_bounds() {
+        assert_eq!(normalize_visible_interval(0), DEFAULT_VISIBLE_INTERVAL_SECS);
+        assert_eq!(normalize_visible_interval(1), MIN_VISIBLE_INTERVAL_SECS);
+        assert_eq!(normalize_visible_interval(7200), MAX_REFRESH_INTERVAL_SECS);
+        assert_eq!(normalize_hidden_interval(0), 0);
+        assert_eq!(normalize_hidden_interval(1), MIN_HIDDEN_INTERVAL_SECS);
+        assert_eq!(normalize_hidden_interval(7200), MAX_REFRESH_INTERVAL_SECS);
     }
 }

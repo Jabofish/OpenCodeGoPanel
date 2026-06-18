@@ -2,14 +2,20 @@ import { escapeHtml } from './format.js';
 
 const OPENCODE_COST_UNITS_PER_USD = 100000000;
 let _trendChart = null;
+let _trendChartKey = '';
+let _trendDomKey = '';
 
 export function renderTrendsTab(history, snapshot, settings, actions, days) {
   const container = document.getElementById('tab-trends');
   if (!container) return;
 
   const entries = Array.isArray(history) ? history : [];
-  container.innerHTML = buildTrendHtml(entries, settings, days);
-  bindTrendControls(actions, days);
+  const domKey = buildTrendKey(entries, days);
+  if (_trendDomKey !== domKey || (entries.length > 0 && !container.querySelector('#trend-chart-canvas'))) {
+    container.innerHTML = buildTrendHtml(entries, settings, days);
+    _trendDomKey = domKey;
+    bindTrendControls(container, actions, days);
+  }
   renderTrendChart(entries);
 }
 
@@ -31,11 +37,11 @@ function buildTrendHtml(entries, settings, days) {
   if (latest) {
     html += '<div class="trend-summary">';
     html += '<div class="trend-summary-row"><span>Latest rolling</span><strong>' +
-      latest.rolling_pct + '%</strong></div>';
+      safePct(latest.rolling_pct) + '%</strong></div>';
     html += '<div class="trend-summary-row"><span>Latest weekly</span><strong>' +
-      latest.weekly_pct + '%</strong></div>';
+      safePct(latest.weekly_pct) + '%</strong></div>';
     html += '<div class="trend-summary-row"><span>Latest monthly</span><strong>' +
-      latest.monthly_pct + '%</strong></div>';
+      safePct(latest.monthly_pct) + '%</strong></div>';
     const totalCost = entries.reduce((sum, e) => sum + (e.total_cost || 0), 0);
     html += '<div class="trend-summary-row"><span>Cost in period</span><strong>$' +
       (totalCost / OPENCODE_COST_UNITS_PER_USD).toFixed(4) + '</strong></div>';
@@ -54,11 +60,11 @@ function buildTrendHtml(entries, settings, days) {
   return html;
 }
 
-function bindTrendControls(actions, days) {
-  document.querySelectorAll('.trend-range-btn').forEach(btn => {
+function bindTrendControls(container, actions, days) {
+  container.querySelectorAll('.trend-range-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const d = parseInt(btn.dataset.days, 10);
-      if (d !== days && actions.setHistoryDays) {
+      if (d !== days && actions?.setHistoryDays) {
         actions.setHistoryDays(d);
       }
     });
@@ -66,19 +72,23 @@ function bindTrendControls(actions, days) {
 }
 
 function renderTrendChart(entries) {
-  // Destroy previous chart instance
-  if (_trendChart) {
-    _trendChart.destroy();
-    _trendChart = null;
+  const canvas = document.getElementById('trend-chart-canvas');
+  if (!canvas || entries.length === 0) {
+    destroyTrendChart();
+    return;
   }
 
-  const canvas = document.getElementById('trend-chart-canvas');
-  if (!canvas || entries.length === 0) return;
+  const chartKey = buildTrendKey(entries, null);
+
+  if (_trendChart && _trendChart.canvas === canvas && _trendChartKey === chartKey) return;
+
+  // Destroy previous chart instance
+  destroyTrendChart();
 
   const labels = entries.map(e => e.date);
-  const rolling = entries.map(e => e.rolling_pct);
-  const weekly = entries.map(e => e.weekly_pct);
-  const monthly = entries.map(e => e.monthly_pct);
+  const rolling = entries.map(e => safePct(e.rolling_pct));
+  const weekly = entries.map(e => safePct(e.weekly_pct));
+  const monthly = entries.map(e => safePct(e.monthly_pct));
 
   // Check if Chart.js is available (loaded as vendor script)
   if (typeof Chart === 'undefined') {
@@ -152,4 +162,27 @@ function renderTrendChart(entries) {
       },
     },
   });
+  _trendChartKey = chartKey;
+}
+
+function destroyTrendChart() {
+  if (!_trendChart) return;
+  _trendChart.destroy();
+  _trendChart = null;
+  _trendChartKey = '';
+}
+
+function buildTrendKey(entries, days) {
+  return (days ?? '') + '::' + entries.map(e => [
+    e.date,
+    safePct(e.rolling_pct),
+    safePct(e.weekly_pct),
+    safePct(e.monthly_pct),
+    e.total_cost || 0,
+  ].join(':')).join('|');
+}
+
+function safePct(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : 0;
 }

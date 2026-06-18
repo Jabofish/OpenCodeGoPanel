@@ -10,6 +10,21 @@ A compact Windows desktop panel for monitoring OpenCode Go usage.
 - Supports multiple workspaces, tray hiding, always-on-top mode, and a global hotkey.
 - Uses the OpenCode web login flow and stores cookies locally.
 - **New:** Mini badge mode with double-click expansion for compact desktop presence.
+- Includes local data backup, export, storage status, and health diagnostics.
+
+## Development
+
+```bash
+npm run test:rust
+```
+
+## Unreleased
+
+- **Local Data & Health panel:** Settings now shows cache/history/settings/auth/export storage, data folder path, health status, and explicit refresh/check actions.
+- **Maintenance module split:** Frontend maintenance state moved to `src/js/maintenance.js`; settings diagnostics rendering moved to `src/js/settings-diagnostics.js`.
+- **Backend maintenance service:** Local data status, backup, cleanup, exports folder opening, and health checks moved behind `src-tauri/src/maintenance.rs`, leaving Tauri commands as thin wrappers.
+- **Stability pass:** Improved cache/auth/history/scheduler edge handling, hotkey registration consistency, refresh interval normalization, quiet-hours parsing, and local file diagnostics.
+- **Test coverage:** Added focused Rust tests for maintenance, cache migration, history calculations, notification windows, settings normalization, and auth edge cases.
 
 ## Release 0.0.5
 

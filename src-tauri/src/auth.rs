@@ -61,10 +61,14 @@ impl AuthStore {
     /// Load full multi-workspace auth. Auto-migrates from legacy format.
     pub fn load_auth(&self) -> Option<StoredAuth> {
         let path = self.auth_path();
-        if !path.exists() {
-            return None;
-        }
-        let raw_content = std::fs::read_to_string(&path).ok()?;
+        let raw_content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(e) => {
+                eprintln!("[Auth] Failed to read auth file {}: {}", path.display(), e);
+                return None;
+            }
+        };
         let (content, needs_rewrite) = match Self::decode_auth_content(&raw_content) {
             Ok(decoded) => (decoded, !raw_content.starts_with(AUTH_ENCRYPTED_PREFIX)),
             Err(e) => {
@@ -98,15 +102,25 @@ impl AuthStore {
             return Some(auth);
         }
 
+        eprintln!("[Auth] Failed to parse auth file {}", path.display());
         None
     }
 
     /// Save full auth to disk.
     fn save_auth(&self, auth: &StoredAuth) -> Result<(), String> {
-        std::fs::create_dir_all(&self.data_dir).map_err(|e| e.to_string())?;
-        let content = serde_json::to_string_pretty(auth).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&self.data_dir).map_err(|e| {
+            format!(
+                "Failed to create auth directory {}: {}",
+                self.data_dir.display(),
+                e
+            )
+        })?;
+        let content = serde_json::to_string_pretty(auth)
+            .map_err(|e| format!("Failed to serialize auth: {}", e))?;
         let content = Self::encode_auth_content(&content)?;
-        std::fs::write(self.auth_path(), content).map_err(|e| e.to_string())
+        let path = self.auth_path();
+        std::fs::write(&path, content)
+            .map_err(|e| format!("Failed to write auth file {}: {}", path.display(), e))
     }
 
     fn decode_auth_content(content: &str) -> Result<String, String> {
@@ -136,6 +150,10 @@ impl AuthStore {
         cookies: Vec<CookieEntry>,
         workspace_id: String,
     ) -> Result<(), String> {
+        if workspace_id.trim().is_empty() {
+            return Err("Workspace id cannot be empty".into());
+        }
+
         let mut auth = self.load_auth().unwrap_or(StoredAuth {
             workspaces: Vec::new(),
             active_workspace: workspace_id.clone(),
@@ -143,11 +161,7 @@ impl AuthStore {
         });
 
         let now = chrono::Utc::now().to_rfc3339();
-        let display_name = if workspace_id.len() > 8 {
-            format!("{}…", &workspace_id[..8])
-        } else {
-            workspace_id.clone()
-        };
+        let display_name = Self::workspace_display_name(&workspace_id);
 
         // Update existing or add new
         if let Some(ws) = auth
@@ -172,24 +186,28 @@ impl AuthStore {
 
     /// Switch active workspace.
     pub fn switch_workspace(&self, workspace_id: &str) -> Result<(), String> {
+        if workspace_id.trim().is_empty() {
+            return Err("Workspace id cannot be empty".into());
+        }
+
         let mut auth = self.load_auth().ok_or("No auth data found")?;
         if !auth
             .workspaces
             .iter()
             .any(|w| w.workspace_id == workspace_id)
         {
-            let active = auth
+            let cookies = auth
                 .workspaces
                 .iter()
                 .find(|w| w.workspace_id == auth.active_workspace)
                 .or_else(|| auth.workspaces.first())
-                .cloned()
+                .map(|w| w.cookies.clone())
                 .ok_or("No workspace credentials found")?;
 
             auth.workspaces.push(WorkspaceCredentials {
                 workspace_id: workspace_id.to_string(),
-                cookies: active.cookies,
-                display_name: workspace_id.to_string(),
+                cookies,
+                display_name: Self::workspace_display_name(workspace_id),
                 added_at: chrono::Utc::now().to_rfc3339(),
             });
         }
@@ -249,10 +267,24 @@ impl AuthStore {
     /// Delete all stored auth data.
     pub fn clear_cookies(&self) -> Result<(), String> {
         let path = self.auth_path();
-        if path.exists() {
-            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+        match std::fs::remove_file(&path) {
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!(
+                "Failed to remove auth file {}: {}",
+                path.display(),
+                e
+            )),
         }
-        Ok(())
+    }
+
+    fn workspace_display_name(workspace_id: &str) -> String {
+        const MAX_DISPLAY_CHARS: usize = 8;
+
+        match workspace_id.char_indices().nth(MAX_DISPLAY_CHARS) {
+            Some((idx, _)) => format!("{}…", &workspace_id[..idx]),
+            None => workspace_id.to_string(),
+        }
     }
 }
 
@@ -374,5 +406,21 @@ mod tests {
 
         let decoded = AuthStore::decode_auth_content(&encoded).unwrap();
         assert_eq!(decoded, raw);
+    }
+
+    #[test]
+    fn workspace_display_name_truncates_on_char_boundary() {
+        assert_eq!(
+            AuthStore::workspace_display_name("workspace-123"),
+            "workspac…"
+        );
+        assert_eq!(
+            AuthStore::workspace_display_name("工作区一二三四五"),
+            "工作区一二三四五"
+        );
+        assert_eq!(
+            AuthStore::workspace_display_name("工作区一二三四五六"),
+            "工作区一二三四五…"
+        );
     }
 }

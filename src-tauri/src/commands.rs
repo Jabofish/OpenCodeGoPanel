@@ -1,7 +1,8 @@
 use crate::auth::{AuthStore, CookieEntry, WorkspaceInfo};
 use crate::cache::AppCache;
 use crate::history::HistoryStore;
-use crate::models::{AppDataSnapshot, HistoryEntry, LocalDataStatus, HealthCheck};
+use crate::maintenance::{self, ClearLocalDataEffect};
+use crate::models::{AppDataSnapshot, HealthCheck, HistoryEntry, LocalDataStatus};
 use crate::paths;
 use crate::scheduler::RefreshScheduler;
 use crate::settings_store::{AppSettings, SettingsStore};
@@ -93,17 +94,27 @@ pub async fn set_mini_badge_window(app: AppHandle, expanded: bool) -> Result<(),
     };
 
     if expanded {
-        window.set_max_size(None::<LogicalSize<f64>>).map_err(|e| e.to_string())?;
-        window.set_min_size(Some(PANEL_MIN_SIZE)).map_err(|e| e.to_string())?;
+        window
+            .set_max_size(None::<LogicalSize<f64>>)
+            .map_err(|e| e.to_string())?;
+        window
+            .set_min_size(Some(PANEL_MIN_SIZE))
+            .map_err(|e| e.to_string())?;
         window.set_resizable(true).map_err(|e| e.to_string())?;
         window.set_shadow(false).map_err(|e| e.to_string())?;
         window.set_size(PANEL_SIZE).map_err(|e| e.to_string())?;
     } else {
         window.set_resizable(false).map_err(|e| e.to_string())?;
         window.set_shadow(false).map_err(|e| e.to_string())?;
-        window.set_min_size(Some(MINI_BADGE_SIZE)).map_err(|e| e.to_string())?;
-        window.set_size(MINI_BADGE_SIZE).map_err(|e| e.to_string())?;
-        window.set_max_size(Some(MINI_BADGE_SIZE)).map_err(|e| e.to_string())?;
+        window
+            .set_min_size(Some(MINI_BADGE_SIZE))
+            .map_err(|e| e.to_string())?;
+        window
+            .set_size(MINI_BADGE_SIZE)
+            .map_err(|e| e.to_string())?;
+        window
+            .set_max_size(Some(MINI_BADGE_SIZE))
+            .map_err(|e| e.to_string())?;
     }
 
     Ok(())
@@ -256,13 +267,17 @@ pub async fn set_hotkey(
     scheduler: tauri::State<'_, Arc<RefreshScheduler>>,
     hotkey: String,
 ) -> Result<(), String> {
-    // Unregister old shortcut
-    let old_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyU);
-    let _ = app.global_shortcut().unregister(old_shortcut);
+    let new_shortcut = shortcut_from_hotkey(&hotkey)?;
+    let old_hotkey = hotkey_state
+        .current
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_else(|_| "Ctrl+Shift+U".to_string());
 
-    let code = parse_ctrl_shift_letter_hotkey(&hotkey)?;
+    if let Ok(old_shortcut) = shortcut_from_hotkey(&old_hotkey) {
+        let _ = app.global_shortcut().unregister(old_shortcut);
+    }
 
-    let new_shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), code);
     let sched = scheduler.inner().clone();
     let toggle_app = app.clone();
     app.global_shortcut()
@@ -271,7 +286,9 @@ pub async fn set_hotkey(
         })
         .map_err(|e| format!("Failed to register hotkey: {}", e))?;
 
-    *hotkey_state.current.lock().unwrap() = hotkey.clone();
+    if let Ok(mut current) = hotkey_state.current.lock() {
+        *current = hotkey.clone();
+    }
     println!("[Hotkey] Changed to: {}", hotkey);
     Ok(())
 }
@@ -374,7 +391,8 @@ pub async fn export_data(
         }
         "usage-records-csv" => {
             let path = export_dir.join(format!("opencode-usage-records-{}.csv", ts));
-            let mut csv = String::from(
+            let mut csv = String::with_capacity(160 + snapshot.usage_records.len() * 256);
+            csv.push_str(
                 "id,workspace_id,time_created,model,provider,input_tokens,output_tokens,\
                 reasoning_tokens,cache_read_tokens,cache_write_5m_tokens,cache_write_1h_tokens,\
                 cost,key_id,session_id,plan\n",
@@ -398,9 +416,15 @@ pub async fn export_data(
                 csv.push(',');
                 csv.push_str(&r.cache_read_tokens.map_or(String::new(), |v| v.to_string()));
                 csv.push(',');
-                csv.push_str(&r.cache_write_5m_tokens.map_or(String::new(), |v| v.to_string()));
+                csv.push_str(
+                    &r.cache_write_5m_tokens
+                        .map_or(String::new(), |v| v.to_string()),
+                );
                 csv.push(',');
-                csv.push_str(&r.cache_write_1h_tokens.map_or(String::new(), |v| v.to_string()));
+                csv.push_str(
+                    &r.cache_write_1h_tokens
+                        .map_or(String::new(), |v| v.to_string()),
+                );
                 csv.push(',');
                 csv.push_str(&r.cost.to_string());
                 csv.push(',');
@@ -408,7 +432,12 @@ pub async fn export_data(
                 csv.push(',');
                 csv.push_str(&csv_cell(&r.session_id));
                 csv.push(',');
-                csv.push_str(&r.enrichment.as_ref().and_then(|e| e.plan.as_ref()).map_or(String::new(), csv_cell));
+                csv.push_str(
+                    &r.enrichment
+                        .as_ref()
+                        .and_then(|e| e.plan.as_ref())
+                        .map_or(String::new(), csv_cell),
+                );
                 csv.push('\n');
             }
             std::fs::write(&path, csv).map_err(|e| e.to_string())?;
@@ -416,7 +445,8 @@ pub async fn export_data(
         }
         "daily-costs-csv" => {
             let path = export_dir.join(format!("opencode-daily-costs-{}.csv", ts));
-            let mut csv = String::from("date,model,total_cost,key_id,plan\n");
+            let mut csv = String::with_capacity(40 + snapshot.daily_costs.len() * 96);
+            csv.push_str("date,model,total_cost,key_id,plan\n");
             for d in &snapshot.daily_costs {
                 csv.push_str(&csv_cell(&d.date));
                 csv.push(',');
@@ -432,7 +462,10 @@ pub async fn export_data(
             std::fs::write(&path, csv).map_err(|e| e.to_string())?;
             Ok(path.to_string_lossy().into_owned())
         }
-        _ => Err(format!("Unknown export kind: {}. Use snapshot-json, usage-records-csv, or daily-costs-csv", kind)),
+        _ => Err(format!(
+            "Unknown export kind: {}. Use snapshot-json, usage-records-csv, or daily-costs-csv",
+            kind
+        )),
     }
 }
 
@@ -447,6 +480,11 @@ fn csv_cell(value: impl AsRef<str>) -> String {
 
 /// Parse a Ctrl+Shift+<letter> hotkey string into a key Code.
 /// Returns the Code on success, or an error message on failure.
+pub(crate) fn shortcut_from_hotkey(hotkey: &str) -> Result<Shortcut, String> {
+    parse_ctrl_shift_letter_hotkey(hotkey)
+        .map(|code| Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), code))
+}
+
 fn parse_ctrl_shift_letter_hotkey(hotkey: &str) -> Result<Code, String> {
     let parts: Vec<&str> = hotkey.split('+').collect();
     if parts.len() != 3 {
@@ -507,34 +545,7 @@ pub async fn send_test_notification(app: AppHandle) -> Result<(), String> {
 pub async fn get_local_data_status(
     _history: tauri::State<'_, Arc<HistoryStore>>,
 ) -> Result<LocalDataStatus, String> {
-    let data_dir = paths::get_data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let file_bytes = |name: &str| -> u64 {
-        std::fs::metadata(data_dir.join(name))
-            .map(|m| m.len())
-            .unwrap_or(0)
-    };
-
-    let mut export_bytes = 0u64;
-    let mut export_count = 0u32;
-    let export_dir = data_dir.join("exports");
-    if let Ok(entries) = std::fs::read_dir(&export_dir) {
-        for entry in entries.flatten() {
-            if entry.metadata().map(|m| m.is_file()).unwrap_or(false) {
-                export_bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
-                export_count += 1;
-            }
-        }
-    }
-
-    Ok(LocalDataStatus {
-        data_dir: data_dir.to_string_lossy().into_owned(),
-        cache_bytes: file_bytes("opencode-cache.json"),
-        history_bytes: file_bytes("opencode-history.json"),
-        settings_bytes: file_bytes("opencode-settings.json"),
-        auth_bytes: file_bytes("opencode-auth.json"),
-        export_bytes,
-        export_count,
-    })
+    Ok(maintenance::local_data_status())
 }
 
 #[tauri::command]
@@ -543,26 +554,7 @@ pub async fn backup_local_data(
     history: tauri::State<'_, Arc<HistoryStore>>,
     settings: tauri::State<'_, Arc<SettingsStore>>,
 ) -> Result<String, String> {
-    let data_dir = paths::get_data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let export_dir = data_dir.join("exports");
-    std::fs::create_dir_all(&export_dir).map_err(|e| e.to_string())?;
-
-    let ts = Utc::now().format("%Y%m%d-%H%M%S");
-    let path = export_dir.join(format!("opencode-backup-{}.json", ts));
-
-    let backup = serde_json::json!({
-        "version": 1,
-        "createdAt": Utc::now().to_rfc3339(),
-        "settings": settings.get(),
-        "history": history.get_entries(90),
-        "cache": cache.get(),
-        "auth": null,
-    });
-
-    std::fs::write(&path, serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-
-    Ok(path.to_string_lossy().into_owned())
+    maintenance::backup_local_data(settings.get(), history.get_entries(90), cache.get())
 }
 
 #[tauri::command]
@@ -571,69 +563,17 @@ pub async fn clear_local_data(
     history: tauri::State<'_, Arc<HistoryStore>>,
     scope: String,
 ) -> Result<(), String> {
-    let data_dir = paths::get_data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    match scope.as_str() {
-        "cache" => cache.clear()?,
-        "history" => {
-            let hf = data_dir.join("opencode-history.json");
-            let _ = std::fs::remove_file(&hf);
-            history.clear();
-        }
-        "exports" => {
-            let export_dir = data_dir.join("exports");
-            if export_dir.exists() {
-                for entry in std::fs::read_dir(&export_dir).map_err(|e| e.to_string())? {
-                    let entry = entry.map_err(|e| e.to_string())?;
-                    if entry.metadata().map(|m| m.is_file()).unwrap_or(false) {
-                        std::fs::remove_file(entry.path()).map_err(|e| e.to_string())?;
-                    }
-                }
-            }
-        }
-        "settings" => {
-            let sf = data_dir.join("opencode-settings.json");
-            let _ = std::fs::remove_file(&sf);
-        }
-        _ => {
-            return Err(format!(
-                "Unknown scope: {}. Use cache, history, exports, or settings.",
-                scope
-            ))
-        }
+    match maintenance::clear_local_data(&scope)? {
+        ClearLocalDataEffect::ClearCache => cache.clear()?,
+        ClearLocalDataEffect::ClearHistory => history.clear(),
+        ClearLocalDataEffect::None => {}
     }
     Ok(())
 }
 
 #[tauri::command]
 pub async fn open_exports_folder() -> Result<String, String> {
-    let data_dir = paths::get_data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let export_dir = data_dir.join("exports");
-    std::fs::create_dir_all(&export_dir).map_err(|e| e.to_string())?;
-
-    let path_str = export_dir.to_string_lossy().to_string();
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(&export_dir)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(&export_dir)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
-            .arg(&export_dir)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-
-    Ok(path_str)
+    maintenance::open_exports_folder()
 }
 
 #[tauri::command]
@@ -641,20 +581,11 @@ pub async fn run_health_check(
     auth: tauri::State<'_, Arc<AuthStore>>,
     cache: tauri::State<'_, Arc<AppCache>>,
 ) -> Result<HealthCheck, String> {
-    let data_dir = paths::get_data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let snapshot = cache.get();
-    let history_ok = std::fs::metadata(data_dir.join("opencode-history.json"))
-        .map(|m| m.is_file())
-        .unwrap_or(true);
-
-    Ok(HealthCheck {
-        has_auth: auth.has_valid_cookies(),
-        cache_ok: true,
-        settings_ok: true,
-        history_ok,
-        data_dir: data_dir.to_string_lossy().into_owned(),
-        last_refresh_error: snapshot.error,
-    })
+    Ok(maintenance::run_health_check(
+        auth.has_valid_cookies(),
+        snapshot.error,
+    ))
 }
 
 #[cfg(test)]
@@ -666,6 +597,7 @@ mod tests {
         assert!(parse_ctrl_shift_letter_hotkey("Ctrl+Shift+U").is_ok());
         assert!(parse_ctrl_shift_letter_hotkey("ctrl+shift+a").is_ok());
         assert!(parse_ctrl_shift_letter_hotkey("Ctrl+Shift+Z").is_ok());
+        assert!(shortcut_from_hotkey("Ctrl+Shift+K").is_ok());
     }
 
     #[test]

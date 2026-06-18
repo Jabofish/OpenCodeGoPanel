@@ -135,10 +135,7 @@ impl SettingsStore {
     }
 
     pub fn get(&self) -> AppSettings {
-        self.data
-            .read()
-            .map(|r| r.clone())
-            .unwrap_or_default()
+        self.data.read().map(|r| r.clone()).unwrap_or_default()
     }
 
     pub fn save(&self, next: AppSettings) -> Result<AppSettings, String> {
@@ -173,6 +170,9 @@ impl SettingsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
     fn temp_dir() -> PathBuf {
         let pid = std::process::id();
@@ -180,7 +180,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis();
-        std::env::temp_dir().join(format!("ocp-stest-{}-{}", pid, millis))
+        let id = NEXT_TEMP_ID.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("ocp-stest-{}-{}-{}", pid, millis, id))
     }
 
     #[test]

@@ -515,6 +515,203 @@ body.mini-badge-mode.expanded #mini-badge {
 .setting-toggle input:checked + .switch { background: rgba(95, 207, 151, 0.42); }
 .setting-toggle input:checked + .switch::after { transform: translateX(14px); }
 
+/* Settings diagnostics */
+.settings-diagnostics {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-diagnostics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.settings-diagnostic-stat {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.settings-diagnostic-stat span,
+.settings-diagnostic-meta {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-dim);
+  font-size: 9px;
+}
+
+.settings-diagnostic-stat strong {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.settings-diagnostic-path {
+  padding: 6px 8px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.025);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 7px;
+  font-size: 9px;
+  line-height: 1.35;
+  word-break: break-all;
+  user-select: text;
+}
+
+.settings-diagnostic-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.settings-diagnostic-action {
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-body);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  font: 650 10px 'Segoe UI', system-ui, -apple-system, sans-serif;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.settings-diagnostic-action .setting-arrow {
+  display: none;
+}
+
+.settings-diagnostic-action:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.settings-diagnostic-action:hover {
+  color: var(--text-primary);
+  border-color: rgba(130, 162, 255, 0.26);
+  background: rgba(130, 162, 255, 0.1);
+}
+
+.settings-diagnostic-action.danger:hover {
+  border-color: rgba(224, 97, 112, 0.34);
+  background: rgba(224, 97, 112, 0.1);
+}
+
+.settings-health-list {
+  display: grid;
+  gap: 4px;
+}
+
+.settings-health-row {
+  display: grid;
+  grid-template-columns: 7px minmax(72px, 0.75fr) minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 7px;
+  min-height: 30px;
+  padding: 4px 7px;
+  border: 1px solid rgba(255, 255, 255, 0.045);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.022);
+  color: var(--text-body);
+  font-size: 10px;
+}
+
+.settings-health-row::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.settings-health-row.ok::before { background: var(--color-weekly); }
+.settings-health-row.warning::before { background: var(--color-monthly); }
+.settings-health-row.error::before { background: #e06170; }
+
+.settings-health-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-health-row > span:first-of-type {
+  color: var(--text-body);
+  font-weight: 600;
+}
+
+.settings-health-row .settings-diagnostic-meta {
+  text-align: right;
+}
+
+.settings-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 9px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.settings-status-pill::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.settings-status-pill.ok {
+  color: #a4ddb9;
+  border-color: rgba(95, 207, 151, 0.24);
+  background: rgba(95, 207, 151, 0.08);
+}
+
+.settings-status-pill.ok::before { background: var(--color-weekly); }
+
+.settings-status-pill.warning {
+  color: #e7c184;
+  border-color: rgba(233, 174, 85, 0.27);
+  background: rgba(233, 174, 85, 0.09);
+}
+
+.settings-status-pill.warning::before { background: var(--color-monthly); }
+
+.settings-status-pill.error {
+  color: #efa0aa;
+  border-color: rgba(224, 97, 112, 0.28);
+  background: rgba(224, 97, 112, 0.09);
+}
+
+.settings-status-pill.error::before { background: #e06170; }
+
+.settings-health-row .settings-status-pill {
+  justify-self: end;
+  max-width: 62px;
+  height: 18px;
+  padding: 0 7px;
+}
+
 #panel-footer {
   display: flex;
   justify-content: space-between;

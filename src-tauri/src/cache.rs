@@ -128,42 +128,60 @@ impl AppCache {
 
     /// Switch the active workspace while keeping any cached data for all workspaces.
     pub fn set_active_workspace(&self, workspace_id: &str) {
-        if let Ok(mut writer) = self.state.write() {
-            writer.active_workspace = workspace_id.to_string();
-            let workspaces = writer.workspaces.clone();
+        match self.state.write() {
+            Ok(mut writer) => {
+                writer.active_workspace = workspace_id.to_string();
 
-            if !writer.snapshots.contains_key(workspace_id) {
-                let mut snapshot = AppDataSnapshot::empty();
-                snapshot.workspace_id = workspace_id.to_string();
-                snapshot.workspaces = workspaces;
-                writer.snapshots.insert(workspace_id.to_string(), snapshot);
-            } else if let Some(snapshot) = writer.snapshots.get_mut(workspace_id) {
-                if snapshot.workspace_id.is_empty() {
+                if !writer.snapshots.contains_key(workspace_id) {
+                    let mut snapshot = AppDataSnapshot::empty();
                     snapshot.workspace_id = workspace_id.to_string();
-                }
-                if snapshot.workspaces.is_empty() {
-                    snapshot.workspaces = workspaces;
-                }
-            }
+                    snapshot.workspaces = writer.workspaces.clone();
+                    writer.snapshots.insert(workspace_id.to_string(), snapshot);
+                } else {
+                    let needs_workspace_list = writer
+                        .snapshots
+                        .get(workspace_id)
+                        .map(|snapshot| snapshot.workspaces.is_empty())
+                        .unwrap_or(false);
+                    let workspaces = if needs_workspace_list && !writer.workspaces.is_empty() {
+                        Some(writer.workspaces.clone())
+                    } else {
+                        None
+                    };
 
-            self.persist_locked(&writer);
+                    if let Some(snapshot) = writer.snapshots.get_mut(workspace_id) {
+                        if snapshot.workspace_id.is_empty() {
+                            snapshot.workspace_id = workspace_id.to_string();
+                        }
+                        if let Some(workspaces) = workspaces {
+                            snapshot.workspaces = workspaces;
+                        }
+                    }
+                }
+
+                let _ = self.persist_locked(&writer);
+            }
+            Err(_) => eprintln!("[Cache] Cache lock poisoned while switching workspace"),
         }
     }
 
     /// Update the active workspace snapshot.
     pub fn update(&self, snapshot: AppDataSnapshot) {
-        if let Ok(mut writer) = self.state.write() {
-            let workspace_id = if snapshot.workspace_id.is_empty() {
-                writer.active_workspace.clone()
-            } else {
-                snapshot.workspace_id.clone()
-            };
+        match self.state.write() {
+            Ok(mut writer) => {
+                let workspace_id = if snapshot.workspace_id.is_empty() {
+                    writer.active_workspace.clone()
+                } else {
+                    snapshot.workspace_id.clone()
+                };
 
-            if !workspace_id.is_empty() {
-                writer.active_workspace = workspace_id.clone();
+                if !workspace_id.is_empty() {
+                    writer.active_workspace = workspace_id.clone();
+                }
+                Self::store_snapshot(&mut writer, workspace_id, snapshot);
+                let _ = self.persist_locked(&writer);
             }
-            Self::store_snapshot(&mut writer, workspace_id, snapshot);
-            self.persist_locked(&writer);
+            Err(_) => eprintln!("[Cache] Cache lock poisoned while updating snapshot"),
         }
     }
 
@@ -172,30 +190,32 @@ impl AppCache {
     where
         F: FnOnce(&mut AppDataSnapshot),
     {
-        if let Ok(mut writer) = self.state.write() {
-            let workspace_id = writer.active_workspace.clone();
-            let key = workspace_id.clone();
-            let mut snapshot = writer
-                .snapshots
-                .remove(&key)
-                .unwrap_or_else(AppDataSnapshot::empty);
+        match self.state.write() {
+            Ok(mut writer) => {
+                let workspace_id = writer.active_workspace.clone();
+                let mut snapshot = writer
+                    .snapshots
+                    .remove(&workspace_id)
+                    .unwrap_or_else(AppDataSnapshot::empty);
 
-            if snapshot.workspace_id.is_empty() {
-                snapshot.workspace_id = workspace_id.clone();
+                if snapshot.workspace_id.is_empty() {
+                    snapshot.workspace_id = workspace_id.clone();
+                }
+                if snapshot.workspaces.is_empty() {
+                    snapshot.workspaces = writer.workspaces.clone();
+                }
+
+                update(&mut snapshot);
+
+                let store_key = if !writer.active_workspace.is_empty() {
+                    writer.active_workspace.clone()
+                } else {
+                    snapshot.workspace_id.clone()
+                };
+                Self::store_snapshot(&mut writer, store_key, snapshot);
+                let _ = self.persist_locked(&writer);
             }
-            if snapshot.workspaces.is_empty() {
-                snapshot.workspaces = writer.workspaces.clone();
-            }
-
-            update(&mut snapshot);
-
-            let store_key = if !writer.active_workspace.is_empty() {
-                writer.active_workspace.clone()
-            } else {
-                snapshot.workspace_id.clone()
-            };
-            Self::store_snapshot(&mut writer, store_key, snapshot);
-            self.persist_locked(&writer);
+            Err(_) => eprintln!("[Cache] Cache lock poisoned while mutating snapshot"),
         }
     }
 
@@ -219,19 +239,18 @@ impl AppCache {
     /// Clear cached usage/model data for all workspaces from memory and disk.
     /// Preserves workspace list and active workspace ID to avoid state loss.
     pub fn clear(&self) -> Result<(), String> {
-        if let Ok(mut writer) = self.state.write() {
-            // Keep workspace metadata, only clear snapshots
-            let active_workspace = writer.active_workspace.clone();
-            let workspaces = writer.workspaces.clone();
+        let mut writer = self
+            .state
+            .write()
+            .map_err(|_| "Cache lock poisoned while clearing cache".to_string())?;
+        let active_workspace = writer.active_workspace.clone();
+        let workspaces = writer.workspaces.clone();
 
-            *writer = PersistedCache::empty();
-            writer.active_workspace = active_workspace;
-            writer.workspaces = workspaces;
+        *writer = PersistedCache::empty();
+        writer.active_workspace = active_workspace;
+        writer.workspaces = workspaces;
 
-            self.persist_locked(&writer);
-        }
-
-        Ok(())
+        self.persist_locked(&writer)
     }
 
     fn parse_cache(content: &str) -> Option<PersistedCache> {
@@ -273,21 +292,34 @@ impl AppCache {
         state.snapshots.insert(key, snapshot);
     }
 
-    fn persist_locked(&self, state: &PersistedCache) {
+    fn persist_locked(&self, state: &PersistedCache) -> Result<(), String> {
         if let Some(parent) = self.cache_path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                eprintln!("[Cache] Failed to create cache dir: {}", e);
-                return;
+                let message = format!("Failed to create cache dir {}: {}", parent.display(), e);
+                eprintln!("[Cache] {}", message);
+                return Err(message);
             }
         }
 
         match serde_json::to_string_pretty(state) {
             Ok(content) => {
                 if let Err(e) = std::fs::write(&self.cache_path, content) {
-                    eprintln!("[Cache] Failed to write cache: {}", e);
+                    let message = format!(
+                        "Failed to write cache file {}: {}",
+                        self.cache_path.display(),
+                        e
+                    );
+                    eprintln!("[Cache] {}", message);
+                    Err(message)
+                } else {
+                    Ok(())
                 }
             }
-            Err(e) => eprintln!("[Cache] Failed to serialize cache: {}", e),
+            Err(e) => {
+                let message = format!("Failed to serialize cache: {}", e);
+                eprintln!("[Cache] {}", message);
+                Err(message)
+            }
         }
     }
 }
@@ -295,7 +327,7 @@ impl AppCache {
 #[cfg(test)]
 mod tests {
     use super::{AppCache, CACHE_FILE};
-    use crate::models::AppDataSnapshot;
+    use crate::models::{AppDataSnapshot, WorkspaceEntry};
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -364,6 +396,114 @@ mod tests {
         let reloaded = AppCache::new(dir.clone());
         assert_eq!(reloaded.get().workspace_id, "ws-2");
         assert_eq!(reloaded.get().last_updated, "two");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn clear_preserves_active_workspace_and_workspace_list() {
+        let dir = temp_data_dir("clear");
+        let cache = AppCache::new(dir.clone());
+
+        let workspace = WorkspaceEntry {
+            id: "ws-1".into(),
+            name: "Primary".into(),
+            slug: Some("primary".into()),
+        };
+        let mut snapshot = AppDataSnapshot::empty();
+        snapshot.workspace_id = workspace.id.clone();
+        snapshot.workspaces = vec![workspace.clone()];
+        snapshot.last_updated = "before-clear".into();
+        snapshot.error = None;
+        cache.update(snapshot);
+
+        cache.clear().unwrap();
+        let cleared = cache.get();
+
+        assert_eq!(cleared.workspace_id, "ws-1");
+        assert_eq!(cleared.workspaces.len(), 1);
+        assert_eq!(cleared.workspaces[0].id, workspace.id);
+        assert_eq!(cleared.last_updated, "");
+        assert_eq!(cleared.error.as_deref(), Some("Not yet loaded"));
+
+        let reloaded = AppCache::new(dir.clone());
+        let reloaded_snapshot = reloaded.get();
+        assert_eq!(reloaded_snapshot.workspace_id, "ws-1");
+        assert_eq!(reloaded_snapshot.workspaces.len(), 1);
+        assert_eq!(reloaded_snapshot.workspaces[0].name, "Primary");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn update_with_can_seed_first_workspace() {
+        let dir = temp_data_dir("update-with-seed");
+        let cache = AppCache::new(dir.clone());
+
+        cache.update_with(|snapshot| {
+            snapshot.workspace_id = "ws-seeded".into();
+            snapshot.last_updated = "seeded".into();
+            snapshot.error = None;
+        });
+
+        let seeded = cache.get();
+        assert_eq!(seeded.workspace_id, "ws-seeded");
+        assert_eq!(seeded.last_updated, "seeded");
+
+        let reloaded = AppCache::new(dir.clone());
+        let reloaded_snapshot = reloaded.get();
+        assert_eq!(reloaded_snapshot.workspace_id, "ws-seeded");
+        assert_eq!(reloaded_snapshot.last_updated, "seeded");
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn v2_cache_without_active_workspace_normalizes_from_snapshot() {
+        let dir = temp_data_dir("normalize-v2");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(CACHE_FILE),
+            r#"{
+                "version": 1,
+                "active_workspace": "",
+                "workspaces": [],
+                "snapshots": {
+                    "ws-normalized": {
+                        "usage": {
+                            "rolling": { "status": "unknown", "usage_percent": 0, "reset_in_sec": 0 },
+                            "weekly": { "status": "unknown", "usage_percent": 0, "reset_in_sec": 0 },
+                            "monthly": { "status": "unknown", "usage_percent": 0, "reset_in_sec": 0 }
+                        },
+                        "model_calls": { "models": [], "total_calls": 0 },
+                        "workspace_id": "ws-normalized",
+                        "last_updated": "normalized",
+                        "error": null,
+                        "usage_records": [],
+                        "daily_costs": [],
+                        "workspaces": [
+                            { "id": "ws-normalized", "name": "Normalized", "slug": null }
+                        ],
+                        "refresh_state": {
+                            "is_refreshing": false,
+                            "phase": "idle",
+                            "last_started_at": null,
+                            "last_finished_at": null,
+                            "last_error": null
+                        }
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let cache = AppCache::new(dir.clone());
+        let snapshot = cache.get();
+
+        assert_eq!(snapshot.workspace_id, "ws-normalized");
+        assert_eq!(snapshot.last_updated, "normalized");
+        assert_eq!(snapshot.workspaces.len(), 1);
+        assert_eq!(snapshot.workspaces[0].name, "Normalized");
 
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -28,6 +28,7 @@ function filterRecordsByRange(records, range, now = new Date()) {
  * Returns sorted array of { name, calls, percentage, input, output, cacheRead, cacheWrite5m, cacheWrite1h, cost, totalTokens, cacheRate, topProvider }
  */
 export function aggregateModelRows(snapshot, range = 'all') {
+  snapshot = snapshot || {};
   const records = filterRecordsByRange(snapshot.usage_records, range);
   const callStats = new Map();
 
@@ -116,6 +117,7 @@ export function renderModelsTab(snapshot, view, actions) {
   const container = document.getElementById('tab-models');
   if (!container) return;
 
+  snapshot = snapshot || {};
   const v = view || { query: '', sortBy: 'calls', showAll: false, range: 'all' };
   const a = actions || {};
   const mc = snapshot.model_calls;
@@ -144,7 +146,7 @@ export function renderModelsTab(snapshot, view, actions) {
 
   // Controls
   html += '<div class="model-controls">';
-  html += '<input id="model-filter" class="model-filter-input" type="text" placeholder="Filter models" value="' + escapeHtml(v.query) + '">';
+  html += '<input id="model-filter" class="model-filter-input" type="text" placeholder="Filter models" value="' + escapeHtml(v.query || '') + '">';
   html += '<select id="model-sort" class="model-sort-select">';
   [
     { value: 'calls', label: 'Calls' },
@@ -240,7 +242,7 @@ export function renderModelsTab(snapshot, view, actions) {
 
   // Bind events
   setTimeout(() => {
-    bindModelControls(a);
+    bindModelControls(container, a);
     // Restore input focus and cursor position
     if (savedFilterFocused && savedFilterValue === v.query) {
       const newFilterEl = document.getElementById('model-filter');
@@ -254,18 +256,30 @@ export function renderModelsTab(snapshot, view, actions) {
   }, 0);
 }
 
-function bindModelControls(a) {
-  const filterEl = document.getElementById('model-filter');
-  const sortEl = document.getElementById('model-sort');
-  const showAllBtn = document.getElementById('model-show-all');
+function bindModelControls(container, a) {
+  const filterEl = container.querySelector('#model-filter');
+  const sortEl = container.querySelector('#model-sort');
+  const showAllBtn = container.querySelector('#model-show-all');
 
-  if (filterEl) filterEl.addEventListener('input', () => { if (a.setQuery) a.setQuery(filterEl.value); });
+  if (filterEl) {
+    filterEl.addEventListener('input', debounce(() => {
+      if (a.setQuery) a.setQuery(filterEl.value);
+    }, 120));
+  }
   if (sortEl) sortEl.addEventListener('change', () => { if (a.setSortBy) a.setSortBy(sortEl.value); });
   if (showAllBtn) showAllBtn.addEventListener('click', () => { if (a.toggleShowAll) a.toggleShowAll(); });
 
-  document.querySelectorAll('[data-model-range]').forEach(btn => {
+  container.querySelectorAll('[data-model-range]').forEach(btn => {
     btn.addEventListener('click', () => {
       if (a.setRange) a.setRange(btn.dataset.modelRange);
     });
   });
+}
+
+function debounce(fn, delay) {
+  let timer = null;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), delay);
+  };
 }

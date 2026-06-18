@@ -2,7 +2,10 @@
   "name": "opencode-usage-panel",
   "private": true,
   "version": "0.0.5",
-  "scripts": { "tauri": "tauri" },
+  "scripts": {
+    "tauri": "tauri",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml"
+  },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",
     "chart.js": "^4.4.0"

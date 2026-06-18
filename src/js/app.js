@@ -7,6 +7,7 @@ import { deriveUsageInsights, pickPrimaryRisk, formatInsightShort } from './insi
 import { renderQuickPeek, openQuickPeek, closeQuickPeek, isQuickPeekOpen } from './quick-peek.js';
 import { getWorkspaceDisplayName, getWorkspaceProfile, sortWorkspaces } from './workspaces.js';
 import { showToast, showConfirm } from './toast.js';
+import { getMaintenanceStatus, refreshMaintenanceStatus as refreshMaintenanceStatusData } from './maintenance.js';
 
 // Check if Tauri API is available
 if (!window.__TAURI__) {
@@ -73,6 +74,7 @@ const modelActions = {
 let latestHistory = [];
 let latestInsights = null;
 let historyDays = 30;
+let workspaceSelectRenderKey = '';
 
 const trendActions = {
   setHistoryDays: async (days) => {
@@ -163,15 +165,28 @@ const settingActions = {
   },
   openExportsFolder: async () => {
     try { await invoke('open_exports_folder'); }
-    catch (e) { console.error('Failed to open exports folder:', e); }
+    catch (e) {
+      console.error('Failed to open exports folder:', e);
+      showToast('Failed to open exports folder: ' + e, { type: 'error' });
+    }
   },
   backupLocalData: async () => {
     try {
       const path = await invoke('backup_local_data');
-      console.log('Backup saved:', path);
+      await refreshMaintenanceStatus();
+      showToast('Backup saved: ' + path, { type: 'success' });
     }
-    catch (e) { console.error('Backup failed:', e); }
+    catch (e) {
+      console.error('Backup failed:', e);
+      showToast('Backup failed: ' + e, { type: 'error' });
+    }
   },
+  refreshMaintenanceStatus: async () => refreshMaintenanceStatus(),
+  refreshLocalDataStatus: async () => refreshMaintenanceStatus(),
+  runHealthCheck: async () => refreshMaintenanceStatus({ forceHealthToast: true }),
+  clearCacheData: async () => settingActions.clearLocalData('cache'),
+  clearAuthData: async () => settingActions.clearLocalData('auth'),
+  clearSettingsData: async () => settingActions.clearLocalData('settings'),
   clearLocalData: async (scope) => {
     const confirmed = await showConfirm(
       `Clear ${scope} data? This cannot be undone.`,
@@ -182,8 +197,10 @@ const settingActions = {
       await invoke('clear_local_data', { scope });
       if (scope === 'cache') {
         // Trigger immediate refresh after cache clear
-        await actions.refresh();
+        await triggerRefresh();
+        await renderAll();
       } else {
+        await refreshMaintenanceStatus({ render: false });
         await renderAll();
       }
       showToast('Cleared ' + scope + ' data', { type: 'success' });
@@ -269,7 +286,7 @@ function startHotkeyRecording() {
   const previous = settings.hotkey || 'Ctrl+Shift+U';
   settings.hotkeyRecording = true;
   // Update settings UI to show recording state
-  renderSettingsTab(latestSnapshot, settings, settingActions, isPinned, localDataStatus);
+  renderSettingsWithMaintenance(latestSnapshot);
 
   const onKeyDown = async (event) => {
     event.preventDefault();
@@ -736,7 +753,7 @@ function applySnapshot(snapshot) {
   renderUsageTab(snapshot, settings, latestInsights);
   renderModelsTab(snapshot, modelView, modelActions);
   renderTrendsTab(latestHistory, snapshot, settings, trendActions, historyDays);
-  renderSettingsTab(snapshot, settings, settingActions, isPinned, localDataStatus);
+  renderSettingsWithMaintenance(snapshot);
   loadWorkspaces();
 }
 
@@ -819,15 +836,16 @@ function toggleFavoriteCurrentWorkspace() {
   updateSettings({ workspaceProfiles: profiles });
 }
 
-let localDataStatus = null;
-
-async function fetchLocalDataStatus() {
-  try {
-    if (!invoke) return;
-    localDataStatus = await invoke('get_local_data_status');
-  } catch (e) {
-    console.warn('[Maintenance] Failed:', e);
+async function refreshMaintenanceStatus(options = {}) {
+  await refreshMaintenanceStatusData(invoke, options);
+  if (options.render !== false) {
+    renderSettingsWithMaintenance(latestSnapshot);
   }
+}
+
+function renderSettingsWithMaintenance(snapshot) {
+  const { localDataStatus, localHealthCheck } = getMaintenanceStatus();
+  renderSettingsTab(snapshot, settings, settingActions, isPinned, localDataStatus, localHealthCheck);
 }
 
 async function switchWorkspaceById(workspaceId) {
@@ -858,6 +876,19 @@ async function loadWorkspaces() {
   if (!sel || !latestSnapshot) return;
   try {
     const workspaces = sortWorkspaces(latestSnapshot.workspaces || [], settings);
+    const key = workspaces.map(ws => {
+      const profile = getWorkspaceProfile(ws.id, settings);
+      return [
+        ws.id,
+        ws.name || '',
+        profile.favorite ? '1' : '0',
+        profile.alias || '',
+      ].join(':');
+    }).join('|') + '::' + (latestSnapshot.workspace_id || '');
+
+    if (key === workspaceSelectRenderKey) return;
+    workspaceSelectRenderKey = key;
+
     sel.innerHTML = '';
     if (workspaces.length <= 1) {
       sel.style.display = 'none';
@@ -921,7 +952,10 @@ function switchTab(name) {
   currentTab = name;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
-  if (name === 'settings') renderSettingsTab(latestSnapshot, settings, settingActions, isPinned, localDataStatus);
+  if (name === 'settings') {
+    renderSettingsWithMaintenance(latestSnapshot);
+    refreshMaintenanceStatus().catch(e => console.warn('[Maintenance] Refresh failed:', e));
+  }
   if (name === 'trends') {
     fetchHistory(historyDays).then(history => {
       latestHistory = history;
@@ -947,7 +981,7 @@ async function setPinned(value) {
       isPinned = value;
       await getCurrentWindow().setAlwaysOnTop(isPinned);
       document.getElementById('btn-pin').classList.toggle('active', isPinned);
-      renderSettingsTab(latestSnapshot, settings, settingActions, isPinned, localDataStatus);
+      renderSettingsWithMaintenance(latestSnapshot);
     }
   } catch (error) {
     console.error('[Controls] Failed to set pin:', error);
@@ -1125,7 +1159,7 @@ async function init() {
     // Trigger refresh and re-render with the updated data
     await triggerRefresh();
     console.log('[Init] Initial refresh triggered, fetching updated snapshot...');
-    await fetchLocalDataStatus();
+    await refreshMaintenanceStatus({ render: false });
     await renderAll();
     console.log('[Init] Re-rendered with refreshed data');
 

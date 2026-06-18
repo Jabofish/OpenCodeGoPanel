@@ -3,6 +3,7 @@ pub mod cache;
 pub mod client;
 pub mod commands;
 pub mod history;
+pub mod maintenance;
 pub mod models;
 pub mod notification_rules;
 pub mod paths;
@@ -24,7 +25,7 @@ use tauri::Manager;
 
 const TRAY_SHOW_ID: &str = "tray-show";
 const TRAY_HIDE_ID: &str = "tray-hide";
-const DEFAULT_HOTKEY: &str = "CmdOrCtrl+Shift+U";
+const DEFAULT_HOTKEY: &str = "Ctrl+Shift+U";
 
 /// Stores the currently registered hotkey string so it can be changed at runtime.
 pub struct HotkeyState {
@@ -48,6 +49,7 @@ pub fn run() {
 
     let settings_store = Arc::new(SettingsStore::new(data_dir.clone()));
     println!("[Backend] SettingsStore created");
+    let initial_hotkey = settings_store.get().hotkey;
 
     let client = Arc::new(OpenCodeClient::new().expect("Failed to create HTTP client"));
     println!("[Backend] HTTP Client created");
@@ -72,7 +74,7 @@ pub fn run() {
         .manage(settings_store.clone())
         .manage(scheduler.clone())
         .manage(Arc::new(HotkeyState {
-            current: Mutex::new(DEFAULT_HOTKEY.to_string()),
+            current: Mutex::new(initial_hotkey),
         }))
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
@@ -103,7 +105,11 @@ pub fn run() {
             commands::open_exports_folder,
             commands::run_health_check,
         ])
-        .plugin(tauri_plugin_window_state::Builder::default().with_filename("opencode-window-state.json").build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_filename("opencode-window-state.json")
+                .build(),
+        )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .on_window_event(move |window, event| {
@@ -134,17 +140,26 @@ pub fn run() {
             let hotkey_sched = scheduler.clone();
             let hotkey_str = {
                 let state = app.state::<Arc<HotkeyState>>();
-                let s = state.current.lock().unwrap().clone();
-                s
+                state
+                    .current
+                    .lock()
+                    .map(|s| s.clone())
+                    .unwrap_or_else(|_| DEFAULT_HOTKEY.to_string())
             };
-            use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
-            let shortcut = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyU);
+            use tauri_plugin_global_shortcut::GlobalShortcutExt;
+            let shortcut = commands::shortcut_from_hotkey(&hotkey_str)
+                .or_else(|_| commands::shortcut_from_hotkey(DEFAULT_HOTKEY));
             let cb_app = hotkey_app.clone();
-            match hotkey_app.global_shortcut().on_shortcut(shortcut, move |_app, _event, _shortcut| {
-                println!("[Hotkey] Ctrl+Shift+U triggered!");
-                toggle_main_window(&cb_app, &hotkey_sched);
+            match shortcut.and_then(|shortcut| {
+                hotkey_app
+                    .global_shortcut()
+                    .on_shortcut(shortcut, move |_app, _event, _shortcut| {
+                        println!("[Hotkey] triggered: {}", hotkey_str);
+                        toggle_main_window(&cb_app, &hotkey_sched);
+                    })
+                    .map_err(|e| e.to_string())
             }) {
-                Ok(_) => println!("[Backend] Global hotkey registered: {}", hotkey_str),
+                Ok(_) => println!("[Backend] Global hotkey registered"),
                 Err(e) => eprintln!("[Backend] Failed to register hotkey: {}", e),
             }
 

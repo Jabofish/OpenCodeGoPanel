@@ -1,6 +1,7 @@
 import { escapeHtml } from './format.js';
+import { buildHealthCheckStatus, buildLocalDataStatus } from './settings-diagnostics.js';
 
-export function renderSettingsTab(snapshot, settings, actions, isPinned, localDataStatus) {
+export function renderSettingsTab(snapshot, settings, actions, isPinned, localDataStatus, healthCheck) {
   const container = document.getElementById('tab-settings');
   if (!container) return;
 
@@ -8,10 +9,7 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
   const workspace = ws?.name || snapshot?.workspace_id || 'Not set';
   const profile = (settings.workspaceProfiles || {})[snapshot?.workspace_id] || {};
   const taskbarStatus = 'Hidden';
-  const totalBytes = localDataStatus
-    ? (localDataStatus.cacheBytes || 0) + (localDataStatus.historyBytes || 0) +
-      (localDataStatus.settingsBytes || 0) + (localDataStatus.exportBytes || 0)
-    : null;
+  const effectiveHealthCheck = healthCheck || snapshot?.healthCheck || localDataStatus?.healthCheck || null;
 
   container.innerHTML = '' +
     '<div class="settings-group">' +
@@ -79,17 +77,22 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
       buildAction('setting-clear-auth', 'Clear login') +
     '</div>' +
     '<div class="settings-group">' +
-      '<div class="settings-title">Data</div>' +
-      (totalBytes !== null
-        ? buildStatus('Local data', formatBytes(totalBytes))
-        : '') +
-      buildAction('setting-open-exports', 'Open exports folder') +
-      buildAction('setting-backup', 'Backup settings/history') +
-      buildAction('setting-export-json', 'Export snapshot JSON') +
-      buildAction('setting-export-records', 'Export usage CSV') +
-      buildAction('setting-export-costs', 'Export costs CSV') +
-      buildAction('setting-clear-exports', 'Clear exports') +
-      buildAction('setting-clear-history', 'Clear history') +
+      '<div class="settings-title">Local Data & Health</div>' +
+      '<div class="settings-diagnostics">' +
+        buildLocalDataStatus(localDataStatus) +
+        buildHealthCheckStatus(effectiveHealthCheck, snapshot) +
+        '<div class="settings-diagnostic-actions">' +
+          buildAction('setting-refresh-local-data', 'Refresh data status', !!actions?.refreshLocalDataStatus, 'settings-diagnostic-action') +
+          buildAction('setting-run-health-check', 'Run health check', !!actions?.runHealthCheck, 'settings-diagnostic-action') +
+          buildAction('setting-open-exports', 'Open exports folder', true, 'settings-diagnostic-action') +
+          buildAction('setting-backup', 'Backup settings/history', true, 'settings-diagnostic-action') +
+          buildAction('setting-export-json', 'Export snapshot JSON', true, 'settings-diagnostic-action') +
+          buildAction('setting-export-records', 'Export usage CSV', true, 'settings-diagnostic-action') +
+          buildAction('setting-export-costs', 'Export costs CSV', true, 'settings-diagnostic-action') +
+          buildAction('setting-clear-exports', 'Clear exports', true, 'settings-diagnostic-action danger') +
+          buildAction('setting-clear-history', 'Clear history', true, 'settings-diagnostic-action danger') +
+        '</div>' +
+      '</div>' +
     '</div>';
 
   bindToggle('setting-pin', (value) => actions.setPinned(value));
@@ -115,6 +118,8 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
   bindAction('setting-export-json', () => actions.exportData('snapshot-json'));
   bindAction('setting-export-records', () => actions.exportData('usage-records-csv'));
   bindAction('setting-export-costs', () => actions.exportData('daily-costs-csv'));
+  bindAction('setting-refresh-local-data', actions?.refreshLocalDataStatus);
+  bindAction('setting-run-health-check', actions?.runHealthCheck);
   bindAction('setting-open-exports', actions.openExportsFolder);
   bindAction('setting-backup', actions.backupLocalData);
   bindAction('setting-clear-exports', () => actions.clearLocalData('exports'));
@@ -131,12 +136,6 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
   });
 }
 
-function formatBytes(bytes) {
-  if (!bytes || bytes === 0) return '0 KB';
-  if (bytes >= 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + ' MB';
-  return Math.ceil(bytes / 1024) + ' KB';
-}
-
 function buildToggle(id, label, checked) {
   return '<label class="setting-row setting-toggle">' +
     '<span>' + escapeHtml(label) + '</span>' +
@@ -146,8 +145,10 @@ function buildToggle(id, label, checked) {
 function buildStatus(label, value) {
   return '<div class="setting-row"><span>' + escapeHtml(label) + '</span><strong>' + value + '</strong></div>';
 }
-function buildAction(id, label) {
-  return '<button id="' + id + '" type="button" class="setting-action"><span>' + escapeHtml(label) + '</span><span class="setting-arrow">></span></button>';
+function buildAction(id, label, enabled = true, className = 'setting-action') {
+  return '<button id="' + id + '" type="button" class="' + escapeHtml(className) + '"' +
+    (enabled ? '' : ' disabled aria-disabled="true"') +
+    '><span>' + escapeHtml(label) + '</span><span class="setting-arrow">></span></button>';
 }
 function buildInput(id, label, value, type, placeholder) {
   const rowClass = 'setting-row setting-input-row setting-input-row-' + id;
@@ -184,7 +185,7 @@ function bindToggle(id, handler) {
 }
 function bindAction(id, handler) {
   const el = document.getElementById(id);
-  if (!el) return;
+  if (!el || typeof handler !== 'function') return;
   el.addEventListener('click', () => {
     handler();
     // Blur to prevent WebView2 focus-triggered viewport scroll
