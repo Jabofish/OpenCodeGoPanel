@@ -228,11 +228,30 @@ export function renderModelsTab(snapshot, view, actions) {
     (v.showAll ? '' : ' · showing ' + Math.min(6, rows.length)) +
   '</div>';
 
+  // Preserve input state before replacing innerHTML
+  const prevFilterEl = document.getElementById('model-filter');
+  const savedFilterValue = prevFilterEl?.value || '';
+  const savedFilterFocused = prevFilterEl === document.activeElement;
+  const savedSelectionStart = savedFilterFocused ? prevFilterEl.selectionStart : null;
+  const savedSelectionEnd = savedFilterFocused ? prevFilterEl.selectionEnd : null;
+
   html += '</div>';
   container.innerHTML = html;
 
   // Bind events
-  setTimeout(() => bindModelControls(a), 0);
+  setTimeout(() => {
+    bindModelControls(a);
+    // Restore input focus and cursor position
+    if (savedFilterFocused && savedFilterValue === v.query) {
+      const newFilterEl = document.getElementById('model-filter');
+      if (newFilterEl) {
+        newFilterEl.focus();
+        if (savedSelectionStart !== null && savedSelectionEnd !== null) {
+          newFilterEl.setSelectionRange(savedSelectionStart, savedSelectionEnd);
+        }
+      }
+    }
+  }, 0);
 }
 
 function bindModelControls(a) {
