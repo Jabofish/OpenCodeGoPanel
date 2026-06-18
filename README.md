@@ -18,13 +18,14 @@ A compact Windows desktop panel for monitoring OpenCode Go usage.
 npm run test:rust
 ```
 
-## Unreleased
+## Release 0.1.0
 
 - **Local Data & Health panel:** Settings now shows cache/history/settings/auth/export storage, data folder path, health status, and explicit refresh/check actions.
 - **Maintenance module split:** Frontend maintenance state moved to `src/js/maintenance.js`; settings diagnostics rendering moved to `src/js/settings-diagnostics.js`.
 - **Backend maintenance service:** Local data status, backup, cleanup, exports folder opening, and health checks moved behind `src-tauri/src/maintenance.rs`, leaving Tauri commands as thin wrappers.
 - **Stability pass:** Improved cache/auth/history/scheduler edge handling, hotkey registration consistency, refresh interval normalization, quiet-hours parsing, and local file diagnostics.
 - **Test coverage:** Added focused Rust tests for maintenance, cache migration, history calculations, notification windows, settings normalization, and auth edge cases.
+- **Models tab:** Preserve search filter input focus during typing for better UX.
 
 ## Release 0.0.5
 
