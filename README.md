@@ -18,6 +18,11 @@ A compact Windows desktop panel for monitoring OpenCode Go usage.
 npm run test:rust
 ```
 
+## Release 0.1.2
+
+- **Update check timeout:** Update checks now time out after 15 seconds instead of hanging indefinitely on slow networks, with a clear error message.
+- **Loading indicator:** A "Checking for updates…" toast appears immediately when an update check starts and is dismissed automatically when the result arrives.
+
 ## Release 0.1.1
 
 - **Auto-update:** Built-in update checker powered by `tauri-plugin-updater` — checks for new versions on startup and on demand, downloads with progress tracking, and installs with a single click. Ed25519-signed releases hosted on GitHub Releases.

@@ -2,7 +2,7 @@
 // Listens for 'update-status' events from the Rust backend and shows
 // a custom overlay dialog with progress tracking.
 
-import { showToast } from './toast.js';
+import { showToast, dismissToast } from './toast.js';
 
 const { invoke } = window.__TAURI__?.core || {};
 const { listen } = window.__TAURI__?.event || {};
@@ -10,6 +10,7 @@ const { listen } = window.__TAURI__?.event || {};
 let updateListenerUnlisten = null;
 let currentDialogVersion = '';
 let pendingUpdateInfo = null;
+let checkingToastId = null;
 
 /**
  * Initialize the updater event listener. Call once at app startup.
@@ -25,7 +26,13 @@ export function initUpdater() {
     if (!payload) return;
 
     switch (payload.status) {
+      case 'checking':
+        if (canShowInlineUI() && typeof showToast === 'function') {
+          checkingToastId = showToast('Checking for updates...', { type: 'info', duration: 0 });
+        }
+        break;
       case 'available':
+        if (checkingToastId) { dismissToast(checkingToastId); checkingToastId = null; }
         if (isInBadgeMode()) {
           // Badge mode: defer dialog until user expands to panel mode
           pendingUpdateInfo = payload.info;
@@ -40,12 +47,13 @@ export function initUpdater() {
         if (canShowInlineUI()) showInstallReady();
         break;
       case 'up-to-date':
-        // Silent — no UI needed
+        if (checkingToastId) { dismissToast(checkingToastId); checkingToastId = null; }
         break;
       case 'installing':
         // App is about to restart
         break;
       case 'error':
+        if (checkingToastId) { dismissToast(checkingToastId); checkingToastId = null; }
         hideDialog();
         if (canShowInlineUI() && typeof showToast === 'function') {
           showToast(payload.message, { type: 'error' });

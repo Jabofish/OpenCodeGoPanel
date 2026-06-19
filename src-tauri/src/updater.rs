@@ -18,6 +18,7 @@ pub struct UpdateInfo {
 #[derive(Clone, Serialize)]
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub enum UpdateStatus {
+    Checking,
     Available { info: UpdateInfo },
     Downloading { progress: f64, total: Option<u64> },
     Downloaded,
@@ -56,6 +57,7 @@ async fn do_check_for_update(
     settings: &SettingsStore,
 ) -> Result<Option<UpdateInfo>, String> {
     println!("[Updater] Checking for updates...");
+    emit_status(&app, UpdateStatus::Checking);
 
     let app_settings = settings.get();
     let skipped = app_settings.skipped_update_version.clone();
@@ -66,8 +68,26 @@ async fn do_check_for_update(
         msg
     })?;
 
-    match updater.check().await {
-        Ok(Some(update)) => {
+    let check_result = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        updater.check(),
+    )
+    .await;
+
+    match check_result {
+        Err(_) => {
+            let msg = "Update check timed out (15s)".to_string();
+            eprintln!("[Updater] {}", msg);
+            emit_status(&app, UpdateStatus::Error { message: msg.clone() });
+            Err(msg)
+        }
+        Ok(Err(e)) => {
+            let msg = format!("Update check failed: {}", e);
+            eprintln!("[Updater] {}", msg);
+            emit_status(&app, UpdateStatus::Error { message: msg.clone() });
+            Err(msg)
+        }
+        Ok(Ok(Some(update))) => {
             let info = UpdateInfo {
                 version: update.version.clone(),
                 notes: update.body.clone(),
@@ -101,16 +121,10 @@ async fn do_check_for_update(
 
             Ok(Some(info))
         }
-        Ok(None) => {
+        Ok(Ok(None)) => {
             println!("[Updater] Already up to date");
             emit_status(&app, UpdateStatus::UpToDate);
             Ok(None)
-        }
-        Err(e) => {
-            let msg = format!("Update check failed: {}", e);
-            eprintln!("[Updater] {}", msg);
-            emit_status(&app, UpdateStatus::Error { message: msg.clone() });
-            Err(msg)
         }
     }
 }
