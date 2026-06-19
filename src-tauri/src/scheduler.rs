@@ -115,16 +115,27 @@ impl RefreshScheduler {
     pub async fn start_adaptive(&self) {
         loop {
             let visible = self.is_visible.load(Ordering::Relaxed);
-            let secs = if visible {
+            let base_secs = if visible {
                 self.visible_interval_secs.load(Ordering::Relaxed)
             } else {
                 self.hidden_interval_secs.load(Ordering::Relaxed)
             };
 
+            let failures = self.consecutive_failures.load(Ordering::Relaxed);
+            let backoff = calculate_backoff(failures);
+            let secs = base_secs.saturating_mul(backoff);
+
             if secs == 0 {
                 // Hidden refresh disabled; sleep and re-check visibility
                 tokio::time::sleep(Duration::from_secs(60)).await;
                 continue;
+            }
+
+            if backoff > 1 {
+                println!(
+                    "[Scheduler] Backoff active: {} consecutive failures, interval {}s (base {}s)",
+                    failures, secs, base_secs
+                );
             }
 
             self.refresh_now().await;
@@ -191,6 +202,7 @@ impl RefreshScheduler {
                 });
 
                 // Success: reset consecutive failures
+                ctx.consecutive_failures.store(0, Ordering::Relaxed);
 
                 // --- Notification checks ---
                 let settings = ctx.settings_store.get();
@@ -201,8 +213,6 @@ impl RefreshScheduler {
                         &settings.quiet_hours_end,
                     );
                 if !is_quiet {
-                    let _cooldown = settings.notification_cooldown_mins;
-
                     // Quota notification (highest of rolling/weekly/monthly)
                     if settings.notify_quota && thresh >= 50 {
                         // Check each period independently
@@ -240,7 +250,11 @@ impl RefreshScheduler {
                 }
             }
             Err(e) if e == "AUTH_EXPIRED" || e == "REDIRECT_TO_LOGIN" => {
-                println!("[Refresh] Auth expired, clearing cookies");
+                ctx.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+                println!(
+                    "[Refresh] Auth expired, clearing cookies (consecutive failures: {})",
+                    ctx.consecutive_failures.load(Ordering::Relaxed)
+                );
                 ctx.auth_store.clear_cookies().ok();
                 ctx.cache
                     .set_error("Session expired. Please log in again.".into());
@@ -254,7 +268,12 @@ impl RefreshScheduler {
                 return;
             }
             Err(e) => {
-                println!("[Scheduler] Usage fetch error: {}", e);
+                ctx.consecutive_failures.fetch_add(1, Ordering::Relaxed);
+                println!(
+                    "[Scheduler] Usage fetch error: {} (consecutive failures: {})",
+                    e,
+                    ctx.consecutive_failures.load(Ordering::Relaxed)
+                );
                 // Don't clear existing usage data for non-auth errors
                 // (workspace may not have a Go plan — let frontend show info message)
                 ctx.cache.update_with(|snapshot| {
@@ -291,7 +310,6 @@ impl RefreshScheduler {
         let records_history = ctx.history_store.clone();
         let spawn_notify_rules = ctx.notification_rules.clone();
         let spawn_settings = ctx.settings_store.clone();
-        let _spawn_consecutive_failures = ctx.consecutive_failures.clone();
         let spawn_app_handle = app_handle.clone();
 
         tokio::spawn(async move {
@@ -333,6 +351,48 @@ impl RefreshScheduler {
 
                 // Budget projection & cost spike notifications
                 let settings = spawn_settings.get();
+
+                // Auto-generate report if configured
+                if settings.report_auto_generate && settings.report_frequency != "off" {
+                    let data_dir = crate::paths::get_data_dir()
+                        .unwrap_or_else(|| std::path::PathBuf::from("."));
+                    if crate::report_generator::should_generate_report(
+                        &settings.report_frequency,
+                        &data_dir,
+                    ) {
+                        let history_entries = records_history.get_entries(90);
+                        if let Err(e) = crate::report_generator::generate_usage_report(
+                            &snapshot,
+                            &history_entries,
+                            &settings,
+                            &settings.report_frequency,
+                            &data_dir,
+                        ) {
+                            eprintln!("[Scheduler] Auto-report generation failed: {}", e);
+                        }
+                    }
+                }
+
+                // Auto-backup if enabled and today's backup doesn't exist
+                if settings.auto_backup && crate::maintenance::should_auto_backup() {
+                    let history_entries = records_history.get_entries(90);
+                    match crate::maintenance::auto_backup(
+                        settings.clone(),
+                        history_entries,
+                        snapshot.clone(),
+                    ) {
+                        Ok(Some(path)) => {
+                            println!("[Scheduler] Auto-backup created: {}", path);
+                        }
+                        Ok(None) => {
+                            // Today's backup already exists, skip
+                        }
+                        Err(e) => {
+                            eprintln!("[Scheduler] Auto-backup failed: {}", e);
+                        }
+                    }
+                }
+
                 let is_quiet = settings.quiet_hours_enabled
                     && notification_rules::is_in_quiet_hours(
                         &settings.quiet_hours_start,
@@ -662,6 +722,17 @@ fn normalize_hidden_interval(secs: u64) -> u64 {
     }
 }
 
+/// Calculate exponential backoff multiplier based on consecutive failures.
+/// Returns 1 for 0-2 failures, then doubles for each additional failure, capped at 64x.
+fn calculate_backoff(failures: u32) -> u64 {
+    if failures < 3 {
+        1
+    } else {
+        // 3 failures → 2x, 4 → 4x, 5 → 8x, 6 → 16x, 7 → 32x, 8+ → 64x
+        2u64.pow((failures - 2).min(6))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -674,5 +745,38 @@ mod tests {
         assert_eq!(normalize_hidden_interval(0), 0);
         assert_eq!(normalize_hidden_interval(1), MIN_HIDDEN_INTERVAL_SECS);
         assert_eq!(normalize_hidden_interval(7200), MAX_REFRESH_INTERVAL_SECS);
+    }
+
+    #[test]
+    fn backoff_no_backoff_under_3_failures() {
+        assert_eq!(calculate_backoff(0), 1);
+        assert_eq!(calculate_backoff(1), 1);
+        assert_eq!(calculate_backoff(2), 1);
+    }
+
+    #[test]
+    fn backoff_doubles_per_failure() {
+        assert_eq!(calculate_backoff(3), 2);
+        assert_eq!(calculate_backoff(4), 4);
+        assert_eq!(calculate_backoff(5), 8);
+        assert_eq!(calculate_backoff(6), 16);
+        assert_eq!(calculate_backoff(7), 32);
+    }
+
+    #[test]
+    fn backoff_caps_at_64x() {
+        assert_eq!(calculate_backoff(8), 64);
+        assert_eq!(calculate_backoff(9), 64);
+        assert_eq!(calculate_backoff(100), 64);
+        assert_eq!(calculate_backoff(u32::MAX), 64);
+    }
+
+    #[test]
+    fn backoff_applied_to_base_interval() {
+        // 30s base × 64x max = 1920s = 32 minutes
+        let base = DEFAULT_VISIBLE_INTERVAL_SECS;
+        assert_eq!(base.saturating_mul(calculate_backoff(0)), 30);
+        assert_eq!(base.saturating_mul(calculate_backoff(3)), 60);
+        assert_eq!(base.saturating_mul(calculate_backoff(8)), 1920);
     }
 }

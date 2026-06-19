@@ -181,6 +181,8 @@ pub struct LocalDataStatus {
     pub auth_bytes: u64,
     pub export_bytes: u64,
     pub export_count: u32,
+    pub backup_bytes: u64,
+    pub backup_count: u32,
 }
 
 /// Health check result (P8)
@@ -210,4 +212,52 @@ pub struct DataFileHealth {
     pub readable: bool,
     pub bytes: u64,
     pub error: Option<String>,
+}
+
+/// Usage report generated for a specific period
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReport {
+    pub period: String,
+    pub period_start: String,
+    pub period_end: String,
+    pub generated_at: String,
+    pub workspace_id: String,
+    pub quota: ReportQuota,
+    pub costs: ReportCosts,
+    pub models: Vec<ModelCallCount>,
+    pub trends: ReportTrends,
+}
+
+/// Quota section of a usage report
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportQuota {
+    pub rolling_pct: u32,
+    pub weekly_pct: u32,
+    pub monthly_pct: u32,
+    pub rolling_status: String,
+    pub weekly_status: String,
+    pub monthly_status: String,
+}
+
+/// Cost section of a usage report
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportCosts {
+    pub period_cost_usd: f64,
+    pub daily_avg_usd: f64,
+    pub projected_monthly_usd: f64,
+    pub budget_usd: f64,
+    pub budget_pct: f64,
+}
+
+/// Trend section of a usage report
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportTrends {
+    pub cost_direction: String,
+    pub cost_change_pct: f64,
+    pub quota_direction: String,
+    pub quota_change_pct: f64,
 }

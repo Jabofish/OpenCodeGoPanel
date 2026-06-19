@@ -7,6 +7,7 @@ export function buildLocalDataStatus(status) {
     '</div>';
   }
   const exportCount = status.exportCount || 0;
+  const backupCount = status.backupCount || 0;
   return '<div class="settings-diagnostics-grid">' +
       buildDiagnosticStat('Total stored', formatBytes(sumLocalDataBytes(status))) +
       buildDiagnosticStat('Cache', formatBytes(status.cacheBytes || 0)) +
@@ -14,6 +15,7 @@ export function buildLocalDataStatus(status) {
       buildDiagnosticStat('Settings', formatBytes(status.settingsBytes || 0)) +
       buildDiagnosticStat('Auth', formatBytes(status.authBytes || 0)) +
       buildDiagnosticStat('Exports', formatBytes(status.exportBytes || 0) + ' - ' + exportCount + ' file' + (exportCount === 1 ? '' : 's')) +
+      buildDiagnosticStat('Backups', formatBytes(status.backupBytes || 0) + ' - ' + backupCount + ' file' + (backupCount === 1 ? '' : 's')) +
     '</div>' +
     (status.dataDir ? '<div class="settings-diagnostic-path">' + escapeHtml(status.dataDir) + '</div>' : '');
 }
@@ -55,7 +57,8 @@ function sumLocalDataBytes(status) {
     (status.historyBytes || 0) +
     (status.settingsBytes || 0) +
     (status.authBytes || 0) +
-    (status.exportBytes || 0);
+    (status.exportBytes || 0) +
+    (status.backupBytes || 0);
 }
 
 function formatCheck(value, okLabel, badLabel) {

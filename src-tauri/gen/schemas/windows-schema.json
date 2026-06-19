@@ -183,6 +183,12 @@
           "markdownDescription": "Enables the backup_local_data command without any pre-configured scope."
         },
         {
+          "description": "Enables the check_for_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-for-update",
+          "markdownDescription": "Enables the check_for_update command without any pre-configured scope."
+        },
+        {
           "description": "Enables the clear_auth command without any pre-configured scope.",
           "type": "string",
           "const": "allow-clear-auth",
@@ -201,6 +207,12 @@
           "markdownDescription": "Enables the clear_local_data command without any pre-configured scope."
         },
         {
+          "description": "Enables the download_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-download-update",
+          "markdownDescription": "Enables the download_update command without any pre-configured scope."
+        },
+        {
           "description": "Enables the export_data command without any pre-configured scope.",
           "type": "string",
           "const": "allow-export-data",
@@ -211,6 +223,12 @@
           "type": "string",
           "const": "allow-extract-cookies-from-webview",
           "markdownDescription": "Enables the extract_cookies_from_webview command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the generate_report command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-generate-report",
+          "markdownDescription": "Enables the generate_report command without any pre-configured scope."
         },
         {
           "description": "Enables the get_auth_status command without any pre-configured scope.",
@@ -253,6 +271,12 @@
           "type": "string",
           "const": "allow-hide-to-tray",
           "markdownDescription": "Enables the hide_to_tray command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the install_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-install-update",
+          "markdownDescription": "Enables the install_update command without any pre-configured scope."
         },
         {
           "description": "Enables the list_workspaces command without any pre-configured scope.",
@@ -345,6 +369,12 @@
           "markdownDescription": "Denies the backup_local_data command without any pre-configured scope."
         },
         {
+          "description": "Denies the check_for_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-for-update",
+          "markdownDescription": "Denies the check_for_update command without any pre-configured scope."
+        },
+        {
           "description": "Denies the clear_auth command without any pre-configured scope.",
           "type": "string",
           "const": "deny-clear-auth",
@@ -363,6 +393,12 @@
           "markdownDescription": "Denies the clear_local_data command without any pre-configured scope."
         },
         {
+          "description": "Denies the download_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-download-update",
+          "markdownDescription": "Denies the download_update command without any pre-configured scope."
+        },
+        {
           "description": "Denies the export_data command without any pre-configured scope.",
           "type": "string",
           "const": "deny-export-data",
@@ -373,6 +409,12 @@
           "type": "string",
           "const": "deny-extract-cookies-from-webview",
           "markdownDescription": "Denies the extract_cookies_from_webview command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the generate_report command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-generate-report",
+          "markdownDescription": "Denies the generate_report command without any pre-configured scope."
         },
         {
           "description": "Denies the get_auth_status command without any pre-configured scope.",
@@ -415,6 +457,12 @@
           "type": "string",
           "const": "deny-hide-to-tray",
           "markdownDescription": "Denies the hide_to_tray command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the install_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-install-update",
+          "markdownDescription": "Denies the install_update command without any pre-configured scope."
         },
         {
           "description": "Denies the list_workspaces command without any pre-configured scope.",
@@ -2779,6 +2827,60 @@
           "type": "string",
           "const": "notification:deny-show",
           "markdownDescription": "Denies the show command without any pre-configured scope."
+        },
+        {
+          "description": "This permission set configures which kind of\nupdater functions are exposed to the frontend.\n\n#### Granted Permissions\n\nThe full workflow from checking for updates to installing them\nis enabled.\n\n\n#### This default permission set includes:\n\n- `allow-check`\n- `allow-download`\n- `allow-install`\n- `allow-download-and-install`",
+          "type": "string",
+          "const": "updater:default",
+          "markdownDescription": "This permission set configures which kind of\nupdater functions are exposed to the frontend.\n\n#### Granted Permissions\n\nThe full workflow from checking for updates to installing them\nis enabled.\n\n\n#### This default permission set includes:\n\n- `allow-check`\n- `allow-download`\n- `allow-install`\n- `allow-download-and-install`"
+        },
+        {
+          "description": "Enables the check command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:allow-check",
+          "markdownDescription": "Enables the check command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the download command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:allow-download",
+          "markdownDescription": "Enables the download command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the download_and_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:allow-download-and-install",
+          "markdownDescription": "Enables the download_and_install command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the install command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:allow-install",
+          "markdownDescription": "Enables the install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:deny-check",
+          "markdownDescription": "Denies the check command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the download command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:deny-download",
+          "markdownDescription": "Denies the download command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the download_and_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:deny-download-and-install",
+          "markdownDescription": "Denies the download_and_install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the install command without any pre-configured scope.",
+          "type": "string",
+          "const": "updater:deny-install",
+          "markdownDescription": "Denies the install command without any pre-configured scope."
         },
         {
           "description": "This permission set configures what kind of\noperations are available from the window state plugin.\n\n#### Granted Permissions\n\nAll operations are enabled by default.\n\n\n#### This default permission set includes:\n\n- `allow-filename`\n- `allow-restore-state`\n- `allow-save-window-state`",

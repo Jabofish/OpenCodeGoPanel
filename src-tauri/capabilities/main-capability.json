@@ -21,10 +21,12 @@
     "allow-refresh-now",
     "allow-get-auth-status",
     "allow-set-visibility",
+    "allow-save-cookies",
+    "allow-set-mini-badge-window",
+    "allow-open-login-window",
     "allow-clear-auth",
     "allow-clear-cache",
     "allow-hide-to-tray",
-    "allow-open-login-window",
     "allow-get-history",
     "allow-set-hotkey",
     "allow-set-threshold",
@@ -40,6 +42,11 @@
     "allow-backup-local-data",
     "allow-clear-local-data",
     "allow-open-exports-folder",
-    "allow-run-health-check"
+    "allow-run-health-check",
+    "allow-generate-report",
+    "allow-check-for-update",
+    "allow-download-update",
+    "allow-install-update",
+    "updater:default"
   ]
 }

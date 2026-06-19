@@ -14,6 +14,11 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
   container.innerHTML = '' +
     '<div class="settings-group">' +
       '<div class="settings-title">Window</div>' +
+      buildSelect('setting-theme', 'Theme', settings.theme || 'system', [
+        { value: 'dark', label: 'Dark' },
+        { value: 'light', label: 'Light' },
+        { value: 'system', label: 'Follow system' },
+      ]) +
       buildToggle('setting-pin', 'Always on top', isPinned) +
       buildToggle('setting-mini-badge', 'Mini badge mode', settings.miniBadgeMode) +
       buildSelect('setting-mini-badge-source', 'Mini badge source', settings.miniBadgeSource, [
@@ -77,7 +82,24 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
       buildAction('setting-clear-auth', 'Clear login') +
     '</div>' +
     '<div class="settings-group">' +
+      '<div class="settings-title">Reports</div>' +
+      buildSelect('setting-report-frequency', 'Report frequency', settings.reportFrequency || 'off', [
+        { value: 'off', label: 'Off' },
+        { value: 'daily', label: 'Daily' },
+        { value: 'weekly', label: 'Weekly' },
+        { value: 'monthly', label: 'Monthly' },
+      ]) +
+      buildToggle('setting-report-auto', 'Auto generate', settings.reportAutoGenerate) +
+      buildAction('setting-generate-report', 'Generate report now') +
+    '</div>' +
+    '<div class="settings-group">' +
+      '<div class="settings-title">Updates</div>' +
+      buildToggle('setting-auto-update', 'Auto check updates', settings.autoUpdate !== false) +
+      buildAction('setting-check-update', 'Check for updates now') +
+    '</div>' +
+    '<div class="settings-group">' +
       '<div class="settings-title">Local Data & Health</div>' +
+      buildToggle('setting-auto-backup', 'Auto backup (daily, keep 7)', settings.autoBackup !== false) +
       '<div class="settings-diagnostics">' +
         buildLocalDataStatus(localDataStatus) +
         buildHealthCheckStatus(effectiveHealthCheck, snapshot) +
@@ -126,6 +148,15 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
   bindAction('setting-clear-history', () => actions.clearLocalData('history'));
   bindAction('setting-rename-workspace', actions.renameWorkspace);
   bindAction('setting-favorite-workspace', actions.toggleFavoriteWorkspace);
+  bindSelect('setting-theme', (value) => actions.setTheme(value));
+  bindSelect('setting-report-frequency', (value) => actions.setReportFrequency(value));
+  bindToggle('setting-report-auto', (value) => actions.setReportAutoGenerate(value));
+  bindAction('setting-generate-report', () => actions.generateReport(
+    settings.reportFrequency === 'off' ? 'daily' : settings.reportFrequency
+  ));
+  bindToggle('setting-auto-backup', (value) => actions.setAutoBackup(value));
+  bindToggle('setting-auto-update', (value) => actions.setAutoUpdate(value));
+  bindAction('setting-check-update', actions.checkForUpdate);
   bindInput('setting-budget', (value) => {
     const cents = Math.round(parseFloat(value || '0') * 100);
     actions.setBudget(cents >= 0 ? cents : 0);

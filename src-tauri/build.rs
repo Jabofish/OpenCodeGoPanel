@@ -28,6 +28,10 @@ fn main() {
             "clear_local_data",
             "open_exports_folder",
             "run_health_check",
+            "generate_report",
+            "check_for_update",
+            "download_update",
+            "install_update",
         ]),
     ))
     .expect("failed to run Tauri build script");

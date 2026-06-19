@@ -9,6 +9,8 @@ const HISTORY_FILE: &str = "opencode-history.json";
 const SETTINGS_FILE: &str = "opencode-settings.json";
 const AUTH_FILE: &str = "opencode-auth.json";
 const EXPORTS_DIR: &str = "exports";
+const BACKUPS_DIR: &str = "backups";
+const MAX_AUTO_BACKUPS: usize = 7;
 
 pub(crate) enum ClearLocalDataEffect {
     None,
@@ -39,6 +41,20 @@ pub(crate) fn open_exports_folder() -> Result<String, String> {
     Ok(path_str)
 }
 
+pub(crate) fn auto_backup(
+    settings: AppSettings,
+    history: Vec<HistoryEntry>,
+    cache: AppDataSnapshot,
+) -> Result<Option<String>, String> {
+    auto_backup_at(&data_dir(), &settings, &history, &cache, Utc::now())
+}
+
+pub(crate) fn should_auto_backup() -> bool {
+    let dir = data_dir().join(BACKUPS_DIR);
+    let today = Utc::now().format("%Y%m%d").to_string();
+    !backup_exists_today(&dir, &today)
+}
+
 pub(crate) fn run_health_check(has_auth: bool, last_refresh_error: Option<String>) -> HealthCheck {
     health_check_in(&data_dir(), has_auth, last_refresh_error)
 }
@@ -64,6 +80,22 @@ fn local_data_status_in(data_dir: &Path) -> LocalDataStatus {
         }
     }
 
+    let mut backup_bytes = 0u64;
+    let mut backup_count = 0u32;
+    let backup_dir = data_dir.join(BACKUPS_DIR);
+
+    if let Ok(entries) = std::fs::read_dir(&backup_dir) {
+        for entry in entries.flatten() {
+            if let Ok(metadata) = entry.metadata() {
+                if !metadata.is_file() {
+                    continue;
+                }
+                backup_bytes += metadata.len();
+                backup_count += 1;
+            }
+        }
+    }
+
     LocalDataStatus {
         data_dir: data_dir.to_string_lossy().into_owned(),
         cache_bytes: file_bytes(data_dir, CACHE_FILE),
@@ -72,6 +104,8 @@ fn local_data_status_in(data_dir: &Path) -> LocalDataStatus {
         auth_bytes: file_bytes(data_dir, AUTH_FILE),
         export_bytes,
         export_count,
+        backup_bytes,
+        backup_count,
     }
 }
 
@@ -102,6 +136,83 @@ fn backup_local_data_at(
     .map_err(|e| e.to_string())?;
 
     Ok(path.to_string_lossy().into_owned())
+}
+
+fn auto_backup_at(
+    data_dir: &Path,
+    settings: &AppSettings,
+    history: &[HistoryEntry],
+    cache: &AppDataSnapshot,
+    now: DateTime<Utc>,
+) -> Result<Option<String>, String> {
+    let backup_dir = ensure_backups_dir(data_dir)?;
+    let today = now.format("%Y%m%d").to_string();
+
+    // Skip if today's backup already exists
+    if backup_exists_today(&backup_dir, &today) {
+        return Ok(None);
+    }
+
+    let path = backup_dir.join(format!("auto-backup-{}.json", today));
+
+    let backup = serde_json::json!({
+        "version": 1,
+        "createdAt": now.to_rfc3339(),
+        "settings": settings,
+        "history": history,
+        "cache": cache,
+        "auth": null,
+    });
+
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&backup).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Rotate old backups, keeping only the most recent MAX_AUTO_BACKUPS
+    rotate_backups(&backup_dir)?;
+
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+fn ensure_backups_dir(data_dir: &Path) -> Result<PathBuf, String> {
+    let backup_dir = data_dir.join(BACKUPS_DIR);
+    std::fs::create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
+    Ok(backup_dir)
+}
+
+fn backup_exists_today(backup_dir: &Path, today: &str) -> bool {
+    let filename = format!("auto-backup-{}.json", today);
+    backup_dir.join(filename).exists()
+}
+
+fn rotate_backups(backup_dir: &Path) -> Result<(), String> {
+    let mut backups: Vec<_> = std::fs::read_dir(backup_dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with("auto-backup-")
+        })
+        .collect();
+
+    if backups.len() <= MAX_AUTO_BACKUPS {
+        return Ok(());
+    }
+
+    // Sort by filename descending (newest first, since date is in name)
+    backups.sort_by_key(|b| std::cmp::Reverse(b.file_name()));
+
+    // Remove oldest backups beyond the limit
+    for old in backups.iter().skip(MAX_AUTO_BACKUPS) {
+        if let Err(e) = std::fs::remove_file(old.path()) {
+            eprintln!("[Backup] Failed to remove old backup {:?}: {}", old.path(), e);
+        }
+    }
+
+    Ok(())
 }
 
 fn clear_local_data_in(data_dir: &Path, scope: &str) -> Result<ClearLocalDataEffect, String> {
@@ -384,6 +495,132 @@ mod tests {
 
         assert_eq!(status, (true, true, None));
         assert!(dir.is_dir());
+
+        std::fs::remove_dir_all(&dir).expect("remove temp test directory");
+    }
+
+    #[test]
+    fn auto_backup_creates_file_in_backups_dir() {
+        let dir = unique_temp_path("auto-backup-create");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let settings = AppSettings::default();
+        let cache = AppDataSnapshot::empty();
+        let now = Utc::now();
+
+        let result = auto_backup_at(&dir, &settings, &[], &cache, now);
+
+        assert!(result.is_ok());
+        let path_opt = result.unwrap();
+        assert!(path_opt.is_some());
+        let path = path_opt.unwrap();
+        assert!(path.contains("auto-backup-"));
+        assert!(std::path::Path::new(&path).exists());
+
+        std::fs::remove_dir_all(&dir).expect("remove temp test directory");
+    }
+
+    #[test]
+    fn auto_backup_skips_when_today_already_exists() {
+        let dir = unique_temp_path("auto-backup-skip");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let settings = AppSettings::default();
+        let cache = AppDataSnapshot::empty();
+        let now = Utc::now();
+
+        // First backup should succeed
+        let first = auto_backup_at(&dir, &settings, &[], &cache, now);
+        assert!(first.is_ok());
+        assert!(first.unwrap().is_some());
+
+        // Second backup same day should return None
+        let second = auto_backup_at(&dir, &settings, &[], &cache, now);
+        assert!(second.is_ok());
+        assert!(second.unwrap().is_none());
+
+        std::fs::remove_dir_all(&dir).expect("remove temp test directory");
+    }
+
+    #[test]
+    fn rotate_backups_keeps_only_max_files() {
+        let dir = unique_temp_path("auto-backup-rotate");
+        let backup_dir = dir.join(BACKUPS_DIR);
+        std::fs::create_dir_all(&backup_dir).expect("create backups dir");
+
+        // Create MAX_AUTO_BACKUPS + 3 files (simulating 10 backups when max is 7)
+        for i in 0..(MAX_AUTO_BACKUPS + 3) {
+            let filename = format!("auto-backup-202601{:02}.json", i + 1);
+            std::fs::write(backup_dir.join(&filename), b"{}").expect("write backup file");
+        }
+
+        let count_before = std::fs::read_dir(&backup_dir)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .ok()
+                    .map(|e| e.file_name().to_string_lossy().starts_with("auto-backup-"))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(count_before, MAX_AUTO_BACKUPS + 3);
+
+        rotate_backups(&backup_dir).expect("rotate should succeed");
+
+        let count_after = std::fs::read_dir(&backup_dir)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .ok()
+                    .map(|e| e.file_name().to_string_lossy().starts_with("auto-backup-"))
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(count_after, MAX_AUTO_BACKUPS);
+
+        // The newest files (highest dates) should remain
+        assert!(backup_dir.join("auto-backup-20260110.json").exists());
+        assert!(backup_dir.join("auto-backup-20260109.json").exists());
+        // The oldest files should be gone
+        assert!(!backup_dir.join("auto-backup-20260101.json").exists());
+        assert!(!backup_dir.join("auto-backup-20260102.json").exists());
+        assert!(!backup_dir.join("auto-backup-20260103.json").exists());
+
+        std::fs::remove_dir_all(&dir).expect("remove temp test directory");
+    }
+
+    #[test]
+    fn backup_exists_today_returns_false_when_no_file() {
+        let dir = unique_temp_path("backup-exists-empty");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+
+        assert!(!backup_exists_today(&dir, "20260619"));
+
+        std::fs::remove_dir_all(&dir).expect("remove temp test directory");
+    }
+
+    #[test]
+    fn backup_exists_today_returns_true_when_file_present() {
+        let dir = unique_temp_path("backup-exists-yes");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        std::fs::write(dir.join("auto-backup-20260619.json"), b"{}").expect("write");
+
+        assert!(backup_exists_today(&dir, "20260619"));
+        assert!(!backup_exists_today(&dir, "20260620"));
+
+        std::fs::remove_dir_all(&dir).expect("remove temp test directory");
+    }
+
+    #[test]
+    fn local_data_status_counts_backups() {
+        let dir = unique_temp_path("status-backups");
+        let backups = dir.join(BACKUPS_DIR);
+        std::fs::create_dir_all(&backups).expect("create backups directory");
+        std::fs::write(backups.join("auto-backup-20260618.json"), b"12345").expect("write backup");
+        std::fs::write(backups.join("auto-backup-20260619.json"), b"1234567890").expect("write backup");
+
+        let status = local_data_status_in(&dir);
+
+        assert_eq!(status.backup_bytes, 15);
+        assert_eq!(status.backup_count, 2);
 
         std::fs::remove_dir_all(&dir).expect("remove temp test directory");
     }

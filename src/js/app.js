@@ -8,6 +8,7 @@ import { renderQuickPeek, openQuickPeek, closeQuickPeek, isQuickPeekOpen } from 
 import { getWorkspaceDisplayName, getWorkspaceProfile, sortWorkspaces } from './workspaces.js';
 import { showToast, showConfirm } from './toast.js';
 import { getMaintenanceStatus, refreshMaintenanceStatus as refreshMaintenanceStatusData } from './maintenance.js';
+import { initUpdater, checkForUpdateManually, consumePendingUpdate } from './updater.js';
 
 // Check if Tauri API is available
 if (!window.__TAURI__) {
@@ -85,6 +86,7 @@ const trendActions = {
 };
 
 const MINI_BADGE_SIZE = { width: 60, height: 60 };
+const MINI_BADGE_RING_SIZE = { width: 76, height: 76 };
 const MINI_BADGE_DOT_SIZE = { width: 28, height: 28 };
 const PANEL_MIN_SIZE = { width: 280, height: 320 };
 const PANEL_SIZE = { width: 320, height: 480 };
@@ -212,6 +214,9 @@ const settingActions = {
   },
   renameWorkspace: () => renameCurrentWorkspace(),
   toggleFavoriteWorkspace: () => toggleFavoriteCurrentWorkspace(),
+  setAutoBackup: (value) => updateSettings({ autoBackup: value }),
+  setAutoUpdate: (value) => updateSettings({ autoUpdate: value }),
+  checkForUpdate: () => checkForUpdateManually(),
 };
 
 function defaultSettings() {
@@ -236,6 +241,8 @@ function defaultSettings() {
     quietHoursStart: '22:00',
     quietHoursEnd: '08:00',
     notificationCooldownMins: 60,
+    autoUpdate: true,
+    skippedUpdateVersion: '',
   };
 }
 
@@ -353,7 +360,9 @@ async function resizeWindowForMiniBadge(expanded) {
     const win = getCurrentWindow();
 
     if (settings.miniBadgeMode && !expanded) {
-      const badgeSize = settings.miniBadgeDisplay === 'dot' ? MINI_BADGE_DOT_SIZE : MINI_BADGE_SIZE;
+      const badgeSize = settings.miniBadgeDisplay === 'dot' ? MINI_BADGE_DOT_SIZE
+        : settings.miniBadgeDisplay === 'ring' ? MINI_BADGE_RING_SIZE
+        : MINI_BADGE_SIZE;
       await setWindowMaxSize(win, null);
       await win.setShadow?.(false);
       await setWindowMinSize(win, badgeSize);
@@ -431,6 +440,7 @@ function setupMiniBadge() {
     setMiniBadgeExpanded(true);
     await resizeWindowForMiniBadge(true);
     startPointerWatch();
+    consumePendingUpdate();
   }
 
   async function collapseMiniBadge() {
@@ -590,13 +600,56 @@ function updateMiniBadge(snapshot) {
     indicatorEl.classList.add('warning');
   }
 
-  // Ring mode CSS variables
+  // Ring mode SVG variables
   if (miniBadge) {
     const ringColor = percentage >= settings.usageThreshold ? '#e06170'
       : percentage >= settings.usageThreshold * 0.8 ? '#e9ae55'
       : '#5fcf97';
-    miniBadge.style.setProperty('--badge-ring-pct', Math.min(percentage, 100) + '%');
     miniBadge.style.setProperty('--badge-ring-color', ringColor);
+
+    if (document.body.classList.contains('badge-ring')) {
+      updateRingSvg(miniBadge, Math.min(percentage, 100));
+    } else {
+      // Clean up SVG when not in ring mode
+      const existing = miniBadge.querySelector('.mini-badge-ring-svg');
+      if (existing) existing.remove();
+    }
+  }
+}
+
+const RING_RADIUS = 30;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+function updateRingSvg(badge, pct) {
+  let svg = badge.querySelector('.mini-badge-ring-svg');
+  if (!svg) {
+    const ns = 'http://www.w3.org/2000/svg';
+    svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('class', 'mini-badge-ring-svg');
+    svg.setAttribute('viewBox', '0 0 72 72');
+
+    const track = document.createElementNS(ns, 'circle');
+    track.setAttribute('class', 'mini-badge-ring-track');
+    track.setAttribute('cx', '36');
+    track.setAttribute('cy', '36');
+    track.setAttribute('r', String(RING_RADIUS));
+    svg.appendChild(track);
+
+    const fill = document.createElementNS(ns, 'circle');
+    fill.setAttribute('class', 'mini-badge-ring-fill');
+    fill.setAttribute('cx', '36');
+    fill.setAttribute('cy', '36');
+    fill.setAttribute('r', String(RING_RADIUS));
+    fill.setAttribute('stroke-dasharray', String(RING_CIRCUMFERENCE));
+    svg.appendChild(fill);
+
+    badge.insertBefore(svg, badge.firstChild);
+  }
+
+  const fillCircle = svg.querySelector('.mini-badge-ring-fill');
+  if (fillCircle) {
+    const offset = RING_CIRCUMFERENCE * (1 - pct / 100);
+    fillCircle.setAttribute('stroke-dashoffset', String(offset));
   }
 }
 
@@ -1080,6 +1133,9 @@ async function init() {
   try {
     // Load settings from backend, falling back to localStorage
     settings = await loadSettingsFromBackend();
+
+    // Initialize auto-update event listener
+    initUpdater();
 
     setupTabs();
     console.log('[Init] Tabs setup complete');

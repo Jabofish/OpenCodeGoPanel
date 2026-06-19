@@ -588,6 +588,27 @@ pub async fn run_health_check(
     ))
 }
 
+#[tauri::command]
+pub async fn generate_report(
+    period: String,
+    cache: tauri::State<'_, Arc<AppCache>>,
+    history: tauri::State<'_, Arc<HistoryStore>>,
+    settings: tauri::State<'_, Arc<SettingsStore>>,
+) -> Result<String, String> {
+    let snapshot = cache.get();
+    let history_entries = history.get_entries(90);
+    let app_settings = settings.get();
+    let data_dir = paths::get_data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    crate::report_generator::generate_usage_report(
+        &snapshot,
+        &history_entries,
+        &app_settings,
+        &period,
+        &data_dir,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -622,5 +643,90 @@ mod tests {
         assert!(parse_ctrl_shift_letter_hotkey("").is_err());
         assert!(parse_ctrl_shift_letter_hotkey("foo").is_err());
         assert!(parse_ctrl_shift_letter_hotkey("Ctrl+Shift++").is_err());
+    }
+
+    /// Verify that every Tauri command registered in build.rs has a matching
+    /// `allow-*` permission in at least one capability JSON file.
+    /// This catches the common mistake of adding a command but forgetting to
+    /// grant the frontend permission to call it.
+    #[test]
+    fn all_commands_have_capability_permissions() {
+        // All commands registered in build.rs (must stay in sync).
+        let commands: &[&str] = &[
+            "get_snapshot",
+            "refresh_now",
+            "get_auth_status",
+            "set_visibility",
+            "save_cookies",
+            "clear_auth",
+            "clear_cache",
+            "hide_to_tray",
+            "set_mini_badge_window",
+            "open_login_window",
+            "extract_cookies_from_webview",
+            "get_history",
+            "set_hotkey",
+            "set_threshold",
+            "get_threshold",
+            "list_workspaces",
+            "switch_workspace",
+            "get_settings",
+            "save_settings",
+            "set_refresh_intervals",
+            "export_data",
+            "send_test_notification",
+            "get_local_data_status",
+            "backup_local_data",
+            "clear_local_data",
+            "open_exports_folder",
+            "run_health_check",
+            "generate_report",
+            "check_for_update",
+            "download_update",
+            "install_update",
+        ];
+
+        // Read all capability JSON files and collect allow-* permissions.
+        let caps_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("capabilities");
+        let mut all_permissions: Vec<String> = Vec::new();
+        for entry in std::fs::read_dir(&caps_dir).expect("capabilities dir") {
+            let entry = entry.expect("dir entry");
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
+            let cap: serde_json::Value = serde_json::from_str(&content)
+                .unwrap_or_else(|e| panic!("parse {}: {}", path.display(), e));
+            if let Some(perms) = cap["permissions"].as_array() {
+                for p in perms {
+                    if let Some(s) = p.as_str() {
+                        all_permissions.push(s.to_string());
+                    }
+                }
+            }
+        }
+
+        // Convert snake_case command name to expected permission string.
+        fn command_to_permission(cmd: &str) -> String {
+            format!("allow-{}", cmd.replace('_', "-"))
+        }
+
+        let mut missing: Vec<String> = Vec::new();
+        for &cmd in commands {
+            let perm = command_to_permission(cmd);
+            if !all_permissions.contains(&perm) {
+                missing.push(format!("{} → {}", cmd, perm));
+            }
+        }
+
+        assert!(
+            missing.is_empty(),
+            "Commands missing from capability permissions:\n  {}\n\
+             Add the corresponding allow-* entries to capabilities/*.json",
+            missing.join("\n  ")
+        );
     }
 }

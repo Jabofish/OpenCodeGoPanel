@@ -7,8 +7,10 @@ pub mod maintenance;
 pub mod models;
 pub mod notification_rules;
 pub mod paths;
+pub mod report_generator;
 pub mod scheduler;
 pub mod settings_store;
+pub mod updater;
 
 use auth::AuthStore;
 use cache::AppCache;
@@ -76,6 +78,7 @@ pub fn run() {
         .manage(Arc::new(HotkeyState {
             current: Mutex::new(initial_hotkey),
         }))
+        .manage(updater::PendingUpdate::new())
         .invoke_handler(tauri::generate_handler![
             commands::get_snapshot,
             commands::refresh_now,
@@ -104,6 +107,10 @@ pub fn run() {
             commands::clear_local_data,
             commands::open_exports_folder,
             commands::run_health_check,
+            commands::generate_report,
+            updater::check_for_update,
+            updater::download_update,
+            updater::install_update,
         ])
         .plugin(
             tauri_plugin_window_state::Builder::default()
@@ -112,6 +119,7 @@ pub fn run() {
         )
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(move |window, event| {
             // Only intercept close for the main window; login window closes normally.
             // This makes Alt+F4 / window-X hide to tray instead of quitting the app.
@@ -169,6 +177,16 @@ pub fn run() {
                 println!("[Backend] Starting scheduler...");
                 sched.start_adaptive().await;
             });
+
+            // Check for updates in the background after a short delay
+            let update_app = app.handle().clone();
+            let auto_update = settings_store.get().auto_update;
+            if auto_update {
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    updater::check_for_update_silent(update_app).await;
+                });
+            }
 
             Ok(())
         })

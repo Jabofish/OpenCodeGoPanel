@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::RwLock;
 
 const SETTINGS_FILE: &str = "opencode-settings.json";
-const SETTINGS_VERSION: u32 = 2;
+const SETTINGS_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -32,6 +32,16 @@ pub struct AppSettings {
     // Workspace profiles (P3)
     pub workspace_profiles: HashMap<String, WorkspaceProfile>,
     pub recent_workspaces: Vec<String>,
+    // Appearance
+    pub theme: String,
+    // Reports
+    pub report_frequency: String,
+    pub report_auto_generate: bool,
+    // Backup
+    pub auto_backup: bool,
+    // Updates
+    pub auto_update: bool,
+    pub skipped_update_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -68,6 +78,14 @@ impl AppSettings {
         // Trim recent workspaces
         if self.recent_workspaces.len() > 5 {
             self.recent_workspaces.truncate(5);
+        }
+        // Normalize theme
+        if !["dark", "light", "system"].contains(&self.theme.as_str()) {
+            self.theme = "system".into();
+        }
+        // Normalize report frequency
+        if !["off", "daily", "weekly", "monthly"].contains(&self.report_frequency.as_str()) {
+            self.report_frequency = "off".into();
         }
         self
     }
@@ -108,6 +126,12 @@ impl Default for AppSettings {
             notification_cooldown_mins: 60,
             workspace_profiles: HashMap::new(),
             recent_workspaces: Vec::new(),
+            theme: "system".into(),
+            report_frequency: "off".into(),
+            report_auto_generate: false,
+            auto_backup: true,
+            auto_update: true,
+            skipped_update_version: String::new(),
         }
     }
 }
@@ -241,6 +265,9 @@ mod tests {
         assert_eq!(parsed.hotkey, "Ctrl+Shift+U");
         assert_eq!(parsed.mini_badge_display, "percent");
         assert_eq!(parsed.notify_quota, true);
+        assert_eq!(parsed.theme, "system");
+        assert_eq!(parsed.report_frequency, "off");
+        assert_eq!(parsed.report_auto_generate, false);
     }
 
     #[test]
@@ -274,6 +301,30 @@ mod tests {
         let s2 = store2.get();
         assert_eq!(s2.mini_badge_mode, true);
         assert_eq!(s2.usage_threshold, 75);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn invalid_theme_normalizes_to_system() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = SettingsStore::new(dir.clone());
+        let mut s = store.get();
+        s.theme = "neon".into();
+        let saved = store.save(s).unwrap();
+        assert_eq!(saved.theme, "system");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn invalid_report_frequency_normalizes_to_off() {
+        let dir = temp_dir();
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = SettingsStore::new(dir.clone());
+        let mut s = store.get();
+        s.report_frequency = "hourly".into();
+        let saved = store.save(s).unwrap();
+        assert_eq!(saved.report_frequency, "off");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

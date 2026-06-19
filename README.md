@@ -18,6 +18,16 @@ A compact Windows desktop panel for monitoring OpenCode Go usage.
 npm run test:rust
 ```
 
+## Release 0.1.1
+
+- **Auto-update:** Built-in update checker powered by `tauri-plugin-updater` — checks for new versions on startup and on demand, downloads with progress tracking, and installs with a single click. Ed25519-signed releases hosted on GitHub Releases.
+- **Badge-mode update handling:** Update dialogs and error toasts are deferred when the mini badge is active or collapsed, preventing clipped/invisible popups. Pending update info is shown when the badge expands to full panel.
+- **Usage reports:** New `report_generator.rs` produces Markdown reports covering quota usage, cost breakdown by model, and trend analysis for configurable periods. Reports are saved to the local data directory.
+- **Settings additions:** Auto-update toggle and "Check for updates now" button in the Updates settings group.
+- **Permission audit test:** `all_commands_have_capability_permissions` cross-references `build.rs` command registrations with capability JSON permissions, catching missing `allow-*` entries at compile time.
+- **Release pipeline:** GitHub Actions workflow now signs artifacts with Ed25519 keys, generates `latest.json`, and uploads `.exe`, `.sig`, and `latest.json` to GitHub Releases automatically.
+- **Stability:** Scheduler exponential backoff for consecutive refresh failures, improved notification cooldown logic, and various clippy fixes.
+
 ## Release 0.1.0
 
 - **Local Data & Health panel:** Settings now shows cache/history/settings/auth/export storage, data folder path, health status, and explicit refresh/check actions.
