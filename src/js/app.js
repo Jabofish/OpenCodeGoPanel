@@ -8,7 +8,7 @@ import { renderQuickPeek, openQuickPeek, closeQuickPeek, isQuickPeekOpen } from 
 import { getWorkspaceDisplayName, getWorkspaceProfile, sortWorkspaces } from './workspaces.js';
 import { showToast, showConfirm } from './toast.js';
 import { getMaintenanceStatus, refreshMaintenanceStatus as refreshMaintenanceStatusData } from './maintenance.js';
-import { initUpdater, checkForUpdateManually, consumePendingUpdate } from './updater.js';
+import { initUpdater, checkForUpdateManually, consumePendingUpdate, isUpdateOverlayActive } from './updater.js';
 
 // Check if Tauri API is available
 if (!window.__TAURI__) {
@@ -469,6 +469,7 @@ function setupMiniBadge() {
 
   function scheduleCollapse() {
     if (!settings.miniBadgeMode || !miniBadgeExpanded) return;
+    if (isUpdateOverlayActive()) return;
     clearCollapseTimer();
     collapseTimer = setTimeout(collapseMiniBadge, 300);
   }
@@ -491,6 +492,11 @@ function setupMiniBadge() {
   async function checkPointerInsideExpandedWindow() {
     if (pointerWatchInFlight || !settings.miniBadgeMode || !miniBadgeExpanded) return;
     if (!cursorPosition || !getCurrentWindow) return;
+    if (isUpdateOverlayActive()) {
+      pointerOutsideSince = null;
+      clearCollapseTimer();
+      return;
+    }
 
     pointerWatchInFlight = true;
     try {

@@ -18,6 +18,12 @@ A compact Windows desktop panel for monitoring OpenCode Go usage.
 npm run test:rust
 ```
 
+## Release 0.1.3
+
+- **Update dialog now shows immediately** in expanded badge mode instead of being silently deferred.
+- **Badge no longer auto-collapses** while the update dialog, download progress, or install prompt is visible.
+- **Fixed download 404:** Removed space from `productName` to align the NSIS installer filename with the URL in `latest.json`.
+
 ## Release 0.1.2
 
 - **Update check timeout:** Update checks now time out after 15 seconds instead of hanging indefinitely on slow networks, with a clear error message.

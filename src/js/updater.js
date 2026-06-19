@@ -11,6 +11,7 @@ let updateListenerUnlisten = null;
 let currentDialogVersion = '';
 let pendingUpdateInfo = null;
 let checkingToastId = null;
+let updateOverlayActive = false;
 
 /**
  * Initialize the updater event listener. Call once at app startup.
@@ -33,8 +34,8 @@ export function initUpdater() {
         break;
       case 'available':
         if (checkingToastId) { dismissToast(checkingToastId); checkingToastId = null; }
-        if (isInBadgeMode()) {
-          // Badge mode: defer dialog until user expands to panel mode
+        if (!canShowInlineUI()) {
+          // Badge is collapsed (tiny window): defer dialog until user expands
           pendingUpdateInfo = payload.info;
         } else {
           showUpdateDialog(payload.info);
@@ -114,6 +115,7 @@ function showUpdateDialog(info) {
     '</div>';
 
   overlay.classList.add('visible');
+  updateOverlayActive = true;
 
   document.getElementById('update-btn-now').addEventListener('click', startDownload);
   document.getElementById('update-btn-skip').addEventListener('click', () => skipVersion(version));
@@ -142,6 +144,7 @@ function showDownloadProgress(progress, total) {
     '</div>';
 
   overlay.classList.add('visible');
+  updateOverlayActive = true;
 }
 
 function showInstallReady() {
@@ -164,6 +167,7 @@ function showInstallReady() {
     '</div>';
 
   overlay.classList.add('visible');
+  updateOverlayActive = true;
 
   document.getElementById('update-btn-install').addEventListener('click', installUpdate);
   document.getElementById('update-btn-later2').addEventListener('click', hideDialog);
@@ -175,6 +179,7 @@ function hideDialog() {
     overlay.classList.remove('visible');
   }
   currentDialogVersion = '';
+  updateOverlayActive = false;
 }
 
 async function startDownload() {
@@ -216,10 +221,6 @@ async function skipVersion(version) {
   hideDialog();
 }
 
-function isInBadgeMode() {
-  return document.body.classList.contains('mini-badge-mode');
-}
-
 /**
  * Whether in-app overlays (toasts, dialogs) are readable.
  * False only when the badge is collapsed (tiny window, content clipped).
@@ -238,6 +239,14 @@ export function consumePendingUpdate() {
     showUpdateDialog(pendingUpdateInfo);
     pendingUpdateInfo = null;
   }
+}
+
+/**
+ * Whether an update overlay (dialog, download progress, install prompt) is currently visible.
+ * Used by app.js to prevent badge auto-collapse during update interactions.
+ */
+export function isUpdateOverlayActive() {
+  return updateOverlayActive;
 }
 
 function escapeHtml(str) {
