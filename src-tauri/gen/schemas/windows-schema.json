@@ -321,6 +321,12 @@
           "markdownDescription": "Enables the save_settings command without any pre-configured scope."
         },
         {
+          "description": "Enables the send_notification command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-send-notification",
+          "markdownDescription": "Enables the send_notification command without any pre-configured scope."
+        },
+        {
           "description": "Enables the send_test_notification command without any pre-configured scope.",
           "type": "string",
           "const": "allow-send-test-notification",
@@ -505,6 +511,12 @@
           "type": "string",
           "const": "deny-save-settings",
           "markdownDescription": "Denies the save_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the send_notification command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-send-notification",
+          "markdownDescription": "Denies the send_notification command without any pre-configured scope."
         },
         {
           "description": "Denies the send_test_notification command without any pre-configured scope.",

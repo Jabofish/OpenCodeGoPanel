@@ -10,7 +10,7 @@ use crate::HotkeyState;
 use chrono::Utc;
 use serde::Deserialize;
 use std::sync::Arc;
-use tauri::{AppHandle, LogicalSize, Manager, Url, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut};
 use tauri_plugin_notification::NotificationExt;
 
@@ -235,6 +235,9 @@ pub async fn extract_cookies_from_webview(
     // Trigger immediate refresh to load data
     println!("[Command] Triggering immediate refresh...");
     scheduler.refresh_now().await;
+
+    // Notify main window that auth state changed (login succeeded)
+    let _ = app.emit("auth-state-changed", serde_json::json!({ "state": "logged_in" }));
 
     // Close login window
     if let Some(login_window) = app.get_webview_window("login") {
@@ -542,6 +545,20 @@ pub async fn send_test_notification(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub async fn send_notification(
+    app: AppHandle,
+    title: String,
+    body: String,
+) -> Result<(), String> {
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub async fn get_local_data_status(
     _history: tauri::State<'_, Arc<HistoryStore>>,
 ) -> Result<LocalDataStatus, String> {
@@ -675,6 +692,7 @@ mod tests {
             "set_refresh_intervals",
             "export_data",
             "send_test_notification",
+            "send_notification",
             "get_local_data_status",
             "backup_local_data",
             "clear_local_data",

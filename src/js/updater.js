@@ -56,7 +56,7 @@ export function initUpdater() {
       case 'error':
         if (checkingToastId) { dismissToast(checkingToastId); checkingToastId = null; }
         hideDialog();
-        if (canShowInlineUI() && typeof showToast === 'function') {
+        if (typeof showToast === 'function') {
           showToast(payload.message, { type: 'error' });
         }
         break;
@@ -74,7 +74,7 @@ export function initUpdater() {
 export async function checkForUpdateManually() {
   try {
     const info = await invoke('check_for_update');
-    if (!info && canShowInlineUI()) {
+    if (!info) {
       if (typeof showToast === 'function') {
         showToast('You are up to date', { type: 'success' });
       }

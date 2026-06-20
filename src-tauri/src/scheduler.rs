@@ -9,6 +9,7 @@ use chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use tauri::Emitter;
 use tauri_plugin_notification::NotificationExt;
 use tokio::time::Duration;
 
@@ -32,6 +33,8 @@ struct RefreshContext {
     is_refreshing: Arc<AtomicBool>,
     threshold: Arc<AtomicU32>,
     consecutive_failures: Arc<AtomicU32>,
+    /// Suppress notifications on first refresh after startup (seed state without alerting)
+    skip_notifications: Arc<AtomicBool>,
 }
 
 pub struct RefreshScheduler {
@@ -56,6 +59,8 @@ pub struct RefreshScheduler {
     hidden_interval_secs: Arc<AtomicU64>,
     /// Consecutive refresh failures (reset on success)
     consecutive_failures: Arc<AtomicU32>,
+    /// Suppress notifications on first refresh after startup
+    skip_notifications: Arc<AtomicBool>,
 }
 
 impl RefreshScheduler {
@@ -88,6 +93,7 @@ impl RefreshScheduler {
                 settings.refresh_hidden_secs,
             ))),
             consecutive_failures: Arc::new(AtomicU32::new(0)),
+            skip_notifications: Arc::new(AtomicBool::new(true)),
         }
     }
 
@@ -163,6 +169,9 @@ impl RefreshScheduler {
                     rs.last_error = Some("Not logged in".into());
                 });
                 ctx.is_refreshing.store(false, Ordering::Release);
+                if let Some(ref handle) = app_handle {
+                    let _ = handle.emit("refresh-complete", serde_json::json!({ "status": "error", "reason": "not_logged_in" }));
+                }
                 return;
             }
         };
@@ -205,6 +214,8 @@ impl RefreshScheduler {
                 ctx.consecutive_failures.store(0, Ordering::Relaxed);
 
                 // --- Notification checks ---
+                // Skip on first refresh after startup (seed threshold state without alerting)
+                let skip = ctx.skip_notifications.load(Ordering::Relaxed);
                 let settings = ctx.settings_store.get();
                 let thresh = ctx.threshold.load(Ordering::Relaxed);
                 let is_quiet = settings.quiet_hours_enabled
@@ -212,7 +223,7 @@ impl RefreshScheduler {
                         &settings.quiet_hours_start,
                         &settings.quiet_hours_end,
                     );
-                if !is_quiet {
+                if !skip && !is_quiet {
                     // Quota notification (highest of rolling/weekly/monthly)
                     if settings.notify_quota && thresh >= 50 {
                         // Check each period independently
@@ -265,6 +276,10 @@ impl RefreshScheduler {
                     rs.last_error = Some(e);
                 });
                 ctx.is_refreshing.store(false, Ordering::Release);
+                if let Some(ref handle) = app_handle {
+                    let _ = handle.emit("auth-state-changed", serde_json::json!({ "state": "expired" }));
+                    let _ = handle.emit("refresh-complete", serde_json::json!({ "status": "error", "reason": "auth_expired" }));
+                }
                 return;
             }
             Err(e) => {
@@ -290,6 +305,9 @@ impl RefreshScheduler {
                     snapshot.last_updated = Utc::now().to_rfc3339();
                 });
                 ctx.is_refreshing.store(false, Ordering::Release);
+                if let Some(ref handle) = app_handle {
+                    let _ = handle.emit("refresh-complete", serde_json::json!({ "status": "error" }));
+                }
                 return;
             }
         }
@@ -311,6 +329,7 @@ impl RefreshScheduler {
         let spawn_notify_rules = ctx.notification_rules.clone();
         let spawn_settings = ctx.settings_store.clone();
         let spawn_app_handle = app_handle.clone();
+        let spawn_skip_notifications = ctx.skip_notifications.load(Ordering::Relaxed);
 
         tokio::spawn(async move {
             let records = Self::refresh_usage_records_incremental(
@@ -322,7 +341,7 @@ impl RefreshScheduler {
             .await;
 
             if let Err(e) = records {
-                Self::handle_fetch_error(&records_cache, &costs_auth, e, "usage records");
+                Self::handle_fetch_error(&records_cache, &costs_auth, e, "usage records", &spawn_app_handle);
             }
 
             records_cache.update_refresh_state(|rs| rs.phase = "costs".into());
@@ -336,7 +355,7 @@ impl RefreshScheduler {
             .await;
 
             if let Err(e) = costs {
-                Self::handle_fetch_error(&costs_cache, &costs_auth, e, "monthly costs");
+                Self::handle_fetch_error(&costs_cache, &costs_auth, e, "monthly costs", &spawn_app_handle);
             }
 
             println!("[Refresh] slow data complete");
@@ -398,7 +417,8 @@ impl RefreshScheduler {
                         &settings.quiet_hours_start,
                         &settings.quiet_hours_end,
                     );
-                if !is_quiet {
+                let spawn_skip = spawn_skip_notifications;
+                if !spawn_skip && !is_quiet {
                     let cooldown = settings.notification_cooldown_mins;
                     let now = Utc::now();
                     let now_str = now.format("%Y-%m-%d").to_string();
@@ -490,7 +510,13 @@ impl RefreshScheduler {
                 rs.last_finished_at = Some(Utc::now().to_rfc3339());
             });
             ctx.is_refreshing.store(false, Ordering::Release);
+            if let Some(ref handle) = spawn_app_handle {
+                let _ = handle.emit("refresh-complete", serde_json::json!({ "status": "complete" }));
+            }
         });
+
+        // First refresh done — subsequent refreshes may fire notifications
+        ctx.skip_notifications.store(false, Ordering::Release);
     }
 
     async fn refresh_usage_records_incremental(
@@ -646,11 +672,20 @@ impl RefreshScheduler {
         }
     }
 
-    fn handle_fetch_error(cache: &AppCache, auth_store: &AuthStore, error: String, label: &str) {
+    fn handle_fetch_error(
+        cache: &AppCache,
+        auth_store: &AuthStore,
+        error: String,
+        label: &str,
+        app_handle: &Option<tauri::AppHandle>,
+    ) {
         if error == "AUTH_EXPIRED" || error == "REDIRECT_TO_LOGIN" {
             println!("[Refresh] Auth expired ({}), clearing cookies", label);
             auth_store.clear_cookies().ok();
             cache.set_error("Session expired. Please log in again.".into());
+            if let Some(ref handle) = app_handle {
+                let _ = handle.emit("auth-state-changed", serde_json::json!({ "state": "expired" }));
+            }
         } else {
             println!("[Refresh] {} error: {}", label, error);
             cache.update_with(|snapshot| {
@@ -695,6 +730,7 @@ impl RefreshScheduler {
             is_refreshing: self.is_refreshing.clone(),
             threshold: self.threshold.clone(),
             consecutive_failures: self.consecutive_failures.clone(),
+            skip_notifications: self.skip_notifications.clone(),
         };
 
         Self::do_refresh(ctx, app_handle).await;

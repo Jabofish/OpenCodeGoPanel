@@ -72,7 +72,10 @@ impl HistoryStore {
     pub fn record(&self, snapshot: &AppDataSnapshot) {
         let today = Utc::now().format("%Y-%m-%d").to_string();
         let workspace_id = snapshot.workspace_id.clone();
-        let total_cost: i64 = snapshot.daily_costs.iter().map(|c| c.total_cost).sum();
+        let total_cost: i64 = snapshot.daily_costs.iter()
+            .filter(|c| c.date == today)
+            .map(|c| c.total_cost)
+            .sum();
 
         let entry = HistoryEntry {
             date: today.clone(),
@@ -449,7 +452,7 @@ mod history_store_tests {
         HISTORY_FILE,
     };
     use crate::models::{AppDataSnapshot, DailyCostEntry};
-    use chrono::NaiveDate;
+    use chrono::{NaiveDate, Utc};
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -509,24 +512,25 @@ mod history_store_tests {
     fn record_replaces_today_per_workspace_and_filters_by_workspace() {
         let dir = temp_data_dir("record");
         let store = HistoryStore::new(dir.clone());
+        let today = Utc::now().format("%Y-%m-%d").to_string();
 
         let mut first = AppDataSnapshot::empty();
         first.workspace_id = "ws-a".into();
         first.usage.rolling.usage_percent = 10;
         first.usage.weekly.usage_percent = 20;
         first.usage.monthly.usage_percent = 30;
-        first.daily_costs = vec![daily_cost("2026-01-01", 100)];
+        first.daily_costs = vec![daily_cost(&today, 100)];
         store.record(&first);
 
         let mut replacement = first.clone();
         replacement.usage.rolling.usage_percent = 90;
-        replacement.daily_costs = vec![daily_cost("2026-01-01", 250)];
+        replacement.daily_costs = vec![daily_cost(&today, 250)];
         store.record(&replacement);
 
         let mut second_workspace = AppDataSnapshot::empty();
         second_workspace.workspace_id = "ws-b".into();
         second_workspace.usage.rolling.usage_percent = 40;
-        second_workspace.daily_costs = vec![daily_cost("2026-01-01", 400)];
+        second_workspace.daily_costs = vec![daily_cost(&today, 400)];
         store.record(&second_workspace);
 
         let ws_a = store.get_entries_for_workspace(1, Some("ws-a"));

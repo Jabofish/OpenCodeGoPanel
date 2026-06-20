@@ -6,7 +6,7 @@ import { renderTrendsTab } from './trends.js';
 import { deriveUsageInsights, pickPrimaryRisk, formatInsightShort } from './insights.js';
 import { renderQuickPeek, openQuickPeek, closeQuickPeek, isQuickPeekOpen } from './quick-peek.js';
 import { getWorkspaceDisplayName, getWorkspaceProfile, sortWorkspaces } from './workspaces.js';
-import { showToast, showConfirm } from './toast.js';
+import { showToast, showConfirm, dismissAllToasts, hideBadgeBubble, isBadgeBubbleActive } from './toast.js';
 import { getMaintenanceStatus, refreshMaintenanceStatus as refreshMaintenanceStatusData } from './maintenance.js';
 import { initUpdater, checkForUpdateManually, consumePendingUpdate, isUpdateOverlayActive } from './updater.js';
 
@@ -19,7 +19,8 @@ if (!window.__TAURI__) {
 
 // Use Tauri v2 global API
 const { invoke } = window.__TAURI__?.core || {};
-const { getCurrentWindow, cursorPosition } = window.__TAURI__?.window || {};
+const { listen } = window.__TAURI__?.event || {};
+const { getCurrentWindow, cursorPosition, monitorFromPoint } = window.__TAURI__?.window || {};
 const { getCurrentWebviewWindow } = window.__TAURI__?.webviewWindow || {};
 
 console.log('[App] Tauri API check:', {
@@ -91,6 +92,17 @@ const MINI_BADGE_DOT_SIZE = { width: 28, height: 28 };
 const PANEL_MIN_SIZE = { width: 280, height: 320 };
 const PANEL_SIZE = { width: 320, height: 480 };
 
+function applyTheme(theme) {
+  const resolved = theme === 'system'
+    ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+    : theme || 'dark';
+  if (resolved === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+  }
+}
+
 const settingActions = {
   setPinned: async (value) => setPinned(value),
   setAutoRefresh: (value) => updateSettings({ autoRefresh: value }),
@@ -127,7 +139,10 @@ const settingActions = {
         visibleSecs: settings.refreshVisibleSecs,
         hiddenSecs: settings.refreshHiddenSecs,
       });
-    } catch (e) { console.warn('[Refresh] set_refresh_intervals failed:', e); }
+    } catch (e) {
+      console.warn('[Refresh] set_refresh_intervals failed:', e);
+      showToast('Failed to update refresh interval: ' + e, { type: 'error' });
+    }
   },
   setRefreshHiddenSecs: async (value) => {
     updateSettings({ refreshHiddenSecs: value });
@@ -136,7 +151,10 @@ const settingActions = {
         visibleSecs: settings.refreshVisibleSecs,
         hiddenSecs: settings.refreshHiddenSecs,
       });
-    } catch (e) { console.warn('[Refresh] set_refresh_intervals failed:', e); }
+    } catch (e) {
+      console.warn('[Refresh] set_refresh_intervals failed:', e);
+      showToast('Failed to update refresh interval: ' + e, { type: 'error' });
+    }
   },
   recordHotkey: async () => startHotkeyRecording(),
   refresh: async () => {
@@ -217,6 +235,20 @@ const settingActions = {
   setAutoBackup: (value) => updateSettings({ autoBackup: value }),
   setAutoUpdate: (value) => updateSettings({ autoUpdate: value }),
   checkForUpdate: () => checkForUpdateManually(),
+  generateReport: async (period) => {
+    try {
+      await invoke('generate_report', { period });
+      showToast('Report generated (' + period + ')', { type: 'success' });
+    } catch (e) {
+      showToast('Report generation failed: ' + e, { type: 'error' });
+    }
+  },
+  setTheme: (value) => {
+    updateSettings({ theme: value });
+    applyTheme(value);
+  },
+  setReportFrequency: (value) => updateSettings({ reportFrequency: value }),
+  setReportAutoGenerate: (value) => updateSettings({ reportAutoGenerate: value }),
 };
 
 function defaultSettings() {
@@ -243,6 +275,9 @@ function defaultSettings() {
     notificationCooldownMins: 60,
     autoUpdate: true,
     skippedUpdateVersion: '',
+    theme: 'system',
+    reportFrequency: 'off',
+    reportAutoGenerate: false,
   };
 }
 
@@ -332,6 +367,7 @@ async function updateSettings(next) {
 }
 
 async function applyUiSettings(options = {}) {
+  applyTheme(settings.theme);
   document.documentElement.classList.toggle('mini-badge-mode', settings.miniBadgeMode);
   document.body.classList.toggle('compact-mode', settings.compactMode);
   document.body.classList.toggle('mini-badge-mode', settings.miniBadgeMode);
@@ -434,11 +470,84 @@ function setupMiniBadge() {
     }
   }
 
+  async function adjustWindowPositionAfterExpand() {
+    if (!getCurrentWindow) return;
+    try {
+      const win = getCurrentWindow();
+      const pos = await win.innerPosition();
+      const size = await win.innerSize();
+
+      let monitor = null;
+      // Try monitorFromPoint using the badge corner (guaranteed on-screen)
+      if (monitorFromPoint) {
+        try {
+          monitor = await monitorFromPoint(pos.x + 30, pos.y + 30);
+        } catch (e) {
+          console.warn('[MiniBadge] monitorFromPoint failed:', e);
+        }
+      }
+      // Fallback to currentMonitor
+      if (!monitor && win.currentMonitor) {
+        try {
+          monitor = await win.currentMonitor();
+        } catch (e) {
+          console.warn('[MiniBadge] currentMonitor failed:', e);
+        }
+      }
+      if (!monitor || !monitor.size || !monitor.position) {
+        console.warn('[MiniBadge] No monitor info available, skipping position adjust');
+        return;
+      }
+
+      const monRight = monitor.position.x + monitor.size.width;
+      const monBottom = monitor.position.y + monitor.size.height;
+
+      console.log('[MiniBadge] Window:', { x: pos.x, y: pos.y, w: size.width, h: size.height });
+      console.log('[MiniBadge] Monitor:', { x: monitor.position.x, y: monitor.position.y, w: monitor.size.width, h: monitor.size.height });
+
+      let newX = pos.x;
+      let newY = pos.y;
+
+      if (pos.x + size.width > monRight) {
+        newX = monRight - size.width;
+      }
+      if (pos.y + size.height > monBottom) {
+        newY = monBottom - size.height;
+      }
+
+      if (newX !== pos.x || newY !== pos.y) {
+        console.log('[MiniBadge] Adjusting position to:', { x: newX, y: newY });
+        const dpi = window.__TAURI__?.dpi;
+        if (dpi?.LogicalPosition) {
+          const scale = monitor.scaleFactor || 1;
+          await win.setPosition(new dpi.LogicalPosition(
+            Math.round(newX / scale),
+            Math.round(newY / scale)
+          ));
+        } else {
+          await win.setPosition({
+            type: 'Logical',
+            data: {
+              x: Math.round(newX / (monitor.scaleFactor || 1)),
+              y: Math.round(newY / (monitor.scaleFactor || 1)),
+            },
+          });
+        }
+      } else {
+        console.log('[MiniBadge] Window fits within monitor, no adjustment needed');
+      }
+    } catch (e) {
+      console.warn('[MiniBadge] adjustWindowPosition failed:', e);
+    }
+  }
+
   async function expandMiniBadge() {
     if (!settings.miniBadgeMode) return;
+    hideBadgeBubble();
     clearCollapseTimer();
     setMiniBadgeExpanded(true);
     await resizeWindowForMiniBadge(true);
+    await adjustWindowPositionAfterExpand();
     startPointerWatch();
     consumePendingUpdate();
   }
@@ -447,8 +556,10 @@ function setupMiniBadge() {
     if (!settings.miniBadgeMode) return;
     clearCollapseTimer();
     stopPointerWatch();
+    hideBadgeBubble();
     setMiniBadgeExpanded(false);
     await resizeWindowForMiniBadge(false);
+    dismissAllToasts();
   }
 
   function startMiniBadgeDrag(event) {
@@ -469,7 +580,7 @@ function setupMiniBadge() {
 
   function scheduleCollapse() {
     if (!settings.miniBadgeMode || !miniBadgeExpanded) return;
-    if (isUpdateOverlayActive()) return;
+    if (isUpdateOverlayActive() || isBadgeBubbleActive()) return;
     clearCollapseTimer();
     collapseTimer = setTimeout(collapseMiniBadge, 300);
   }
@@ -492,7 +603,7 @@ function setupMiniBadge() {
   async function checkPointerInsideExpandedWindow() {
     if (pointerWatchInFlight || !settings.miniBadgeMode || !miniBadgeExpanded) return;
     if (!cursorPosition || !getCurrentWindow) return;
-    if (isUpdateOverlayActive()) {
+    if (isUpdateOverlayActive() || isBadgeBubbleActive()) {
       pointerOutsideSince = null;
       clearCollapseTimer();
       return;
@@ -694,12 +805,14 @@ async function openLoginWindow() {
   try {
     if (!invoke) {
       console.error('[Login] invoke not available');
+      showToast('Tauri API not available', { type: 'error' });
       return;
     }
     await invoke('open_login_window');
     console.log('[Login] Login window opened');
   } catch (e) {
     console.error('[Login] Failed to open login window:', e);
+    showToast('Failed to open login window: ' + e, { type: 'error' });
   }
 }
 
@@ -725,6 +838,7 @@ async function triggerRefresh() {
     console.log('[Refresh] Refresh triggered');
   } catch (e) {
     console.error('[Refresh] Refresh failed:', e);
+    showToast('Refresh failed: ' + e, { type: 'error' });
   }
 }
 
@@ -747,6 +861,7 @@ async function clearAuth() {
     await renderAll();
   } catch (e) {
     console.error('[Auth] Clear failed:', e);
+    showToast('Failed to clear auth: ' + e, { type: 'error' });
   }
 }
 
@@ -759,6 +874,7 @@ async function clearCache() {
     await triggerRefresh();
   } catch (e) {
     console.error('[Cache] Clear failed:', e);
+    showToast('Failed to clear cache: ' + e, { type: 'error' });
   }
 }
 
@@ -927,6 +1043,7 @@ async function switchWorkspaceById(workspaceId) {
     workspaceSwitchState.switching = false;
     workspaceSwitchState.error = String(e);
     if (sel) sel.value = workspaceSwitchState.previousId;
+    showToast('Failed to switch workspace: ' + e, { type: 'error' });
   }
 }
 
@@ -995,6 +1112,7 @@ function setupWorkspaceSelector() {
       console.error('[Workspace] Switch failed:', e);
       workspaceSwitchState.switching = false;
       workspaceSwitchState.error = String(e);
+      showToast('Failed to switch workspace: ' + e, { type: 'error' });
       // Restore previous selection
       sel.value = workspaceSwitchState.previousId;
       // Clear error after a few seconds
@@ -1044,6 +1162,7 @@ async function setPinned(value) {
     }
   } catch (error) {
     console.error('[Controls] Failed to set pin:', error);
+    showToast('Failed to toggle pin: ' + error, { type: 'error' });
   }
 }
 
@@ -1064,6 +1183,7 @@ async function minimizeWindow() {
     }
   } catch (error) {
     console.error('[Controls] Failed to minimize:', error);
+    showToast('Failed to minimize: ' + error, { type: 'error' });
   }
 }
 
@@ -1082,6 +1202,7 @@ async function hideToTray() {
     }
   } catch (error) {
     console.error('[Controls] Failed to hide to tray:', error);
+    showToast('Failed to hide to tray: ' + error, { type: 'error' });
   }
 }
 
@@ -1142,6 +1263,23 @@ async function init() {
 
     // Initialize auto-update event listener
     initUpdater();
+
+    // Backend event listeners for push-based state updates
+    if (listen) {
+      listen('auth-state-changed', async (event) => {
+        console.log('[Event] auth-state-changed:', event.payload);
+        await refreshMaintenanceStatus({ render: false });
+        await renderAll();
+      });
+      listen('refresh-complete', async (event) => {
+        console.log('[Event] refresh-complete:', event.payload);
+        await renderAll();
+        if (currentTab === 'trends') {
+          latestHistory = await fetchHistory(historyDays);
+          renderTrendsTab(latestHistory, latestSnapshot, settings, trendActions, historyDays);
+        }
+      });
+    }
 
     setupTabs();
     console.log('[Init] Tabs setup complete');

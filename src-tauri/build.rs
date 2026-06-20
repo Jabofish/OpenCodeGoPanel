@@ -23,6 +23,7 @@ fn main() {
             "set_refresh_intervals",
             "export_data",
             "send_test_notification",
+            "send_notification",
             "get_local_data_status",
             "backup_local_data",
             "clear_local_data",

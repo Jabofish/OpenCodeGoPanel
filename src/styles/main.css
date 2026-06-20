@@ -1373,6 +1373,82 @@ body.badge-dot.mini-badge-mode:not(.expanded) body {
 .toast-warning { border-left: 3px solid var(--color-monthly); }
 .toast-error { border-left: 3px solid var(--color-danger); }
 
+/* Badge bubble notification — chat bubble pops out to the right of badge */
+html.badge-bubble-active,
+html.badge-bubble-active body {
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  overflow: visible !important;
+  background: transparent !important;
+}
+body.badge-bubble-active #app {
+  display: none !important;
+}
+/* Keep badge visible; bubble positions itself to the right via left offset */
+.badge-bubble {
+  position: fixed;
+  top: calc(50% - 5px);
+  left: 72px;
+  transform: translateX(-10px) translateY(-50%) scale(0.85);
+  display: flex;
+  align-items: center;
+  max-width: 180px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  background: var(--bg-panel);
+  border: none;
+  border-radius: 16px 16px 16px 4px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1), 0 0 1px rgba(0, 0, 0, 0.12);
+  opacity: 0;
+  transition: opacity 0.22s cubic-bezier(.4,0,.2,1), transform 0.22s cubic-bezier(.4,0,.2,1);
+  word-wrap: break-word;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+/* Curved tail pointing left toward badge */
+.badge-bubble::before {
+  content: '';
+  position: absolute;
+  left: -7px;
+  bottom: 6px;
+  width: 12px;
+  height: 14px;
+  background: var(--bg-panel);
+  border-radius: 0 0 0 8px;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+}
+.badge-bubble-show {
+  opacity: 1;
+  transform: translateX(0) translateY(-50%) scale(1);
+}
+.badge-bubble-hide {
+  opacity: 0;
+  transform: translateX(-10px) translateY(-50%) scale(0.85);
+}
+/* Adjust position for ring badge (76px + border) */
+body.badge-ring .badge-bubble { left: 92px; }
+/* Adjust position for dot badge (28px) */
+body.badge-dot .badge-bubble { left: 40px; }
+/* Type indicator: small colored dot */
+.badge-bubble::after {
+  content: '';
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 8px;
+}
+.badge-bubble-info::after { background: var(--color-accent); }
+.badge-bubble-success::after { background: var(--color-weekly); }
+.badge-bubble-warning::after { background: var(--color-monthly); }
+.badge-bubble-error::after { background: var(--color-danger); }
+
 /* Confirm dialog */
 .confirm-overlay {
   position: fixed;

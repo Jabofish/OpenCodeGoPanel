@@ -18,6 +18,16 @@ A compact Windows desktop panel for monitoring OpenCode Go usage.
 npm run test:rust
 ```
 
+## Release 0.1.4
+
+- **Badge bubble notifications:** Collapsed badge now shows a WeChat-style chat bubble popping out to the right when toasts are triggered, replacing invisible inline toasts and intrusive OS notifications.
+- **Startup notification suppression:** Threshold, budget, and cost-spike notifications are suppressed on the first refresh after startup — no more annoying popups every time the app launches.
+- **Window boundary detection:** Badge expansion and bubble display now detect screen edges and reposition automatically to stay within the monitor bounds.
+- **Theme switching fix:** Fixed missing `setTheme` action that caused dark/light/system theme switching to silently fail with a TypeError.
+- **Badge position stability:** Fixed position shift and semi-transparent background artifacts in bubble mode by avoiding `setResizable` and ensuring both `html` and `body` fill the transparent viewport.
+- **Toast cleanup on collapse:** Residual toasts are instantly removed when the badge collapses, preventing lingering animation artifacts.
+- **CI cache:** Added `shared-key: "stable"` to `swatinem/rust-cache` for incremental builds across version bumps.
+
 ## Release 0.1.3
 
 - **Update dialog now shows immediately** in expanded badge mode instead of being silently deferred.

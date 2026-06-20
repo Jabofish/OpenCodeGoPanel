@@ -102,6 +102,7 @@ pub fn run() {
             commands::set_refresh_intervals,
             commands::export_data,
             commands::send_test_notification,
+            commands::send_notification,
             commands::get_local_data_status,
             commands::backup_local_data,
             commands::clear_local_data,
