@@ -30,6 +30,8 @@ fn main() {
             "open_exports_folder",
             "run_health_check",
             "generate_report",
+            "set_autostart",
+            "get_autostart",
             "check_for_update",
             "download_update",
             "install_update",

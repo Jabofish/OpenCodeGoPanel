@@ -1,4 +1,4 @@
-import { formatPct, escapeHtml } from './format.js';
+import { formatPct, escapeHtml, formatTimeAgo } from './format.js';
 
 const MODEL_COLORS = ['#8a9eff', '#5cc08a', '#e0a050', '#7b7bbb', '#5aaac0', '#c080d0'];
 const OPENCODE_COST_UNITS_PER_USD = 100000000;
@@ -118,7 +118,7 @@ export function renderModelsTab(snapshot, view, actions) {
   if (!container) return;
 
   snapshot = snapshot || {};
-  const v = view || { query: '', sortBy: 'calls', showAll: false, range: 'all' };
+  const v = view || { query: '', sortBy: 'calls', showAll: false, range: 'all', requestsOpen: false, requestsModelFilter: '' };
   const a = actions || {};
   const mc = snapshot.model_calls;
   if (!mc || !mc.models || mc.models.length === 0) {
@@ -144,8 +144,11 @@ export function renderModelsTab(snapshot, view, actions) {
 
   let html = '';
 
-  // Controls
+  // Controls — two rows to avoid cramping
   html += '<div class="model-controls">';
+
+  // Row 1: filter, sort, range
+  html += '<div class="model-controls-row">';
   html += '<input id="model-filter" class="model-filter-input" type="text" placeholder="Filter models" value="' + escapeHtml(v.query || '') + '">';
   html += '<select id="model-sort" class="model-sort-select">';
   [
@@ -165,8 +168,25 @@ export function renderModelsTab(snapshot, view, actions) {
       '" data-model-range="' + r + '">' + (r === 'all' ? 'All' : r) + '</button>';
   });
   html += '</div>';
+  html += '</div>';
+
+  // Row 2: recent requests toggle + show all
+  html += '<div class="model-controls-row">';
+  html += '<button id="model-requests-toggle" class="model-requests-btn' + (v.requestsOpen ? ' active' : '') + '">' +
+    (v.requestsOpen ? '&#x25BC; Recent requests' : '&#x25B6; Recent requests') +
+  '</button>';
   html += '<button id="model-show-all" class="model-show-all-btn">' + (v.showAll ? 'Show Less' : 'Show All') + '</button>';
   html += '</div>';
+
+  html += '</div>';
+
+  // Active model filter chip (when a model row is selected for request filtering)
+  if (v.requestsModelFilter) {
+    html += '<div class="request-filter-chip">' +
+      '<span>Filtering: ' + escapeHtml(v.requestsModelFilter) + '</span>' +
+      '<button id="request-filter-clear" class="request-filter-clear" title="Clear filter">&times;</button>' +
+    '</div>';
+  }
 
   // Model list
   const totalCalls = filtered.reduce((sum, m) => sum + (m.calls || 0), 0);
@@ -176,9 +196,10 @@ export function renderModelsTab(snapshot, view, actions) {
   visible.forEach((m, i) => {
     const color = MODEL_COLORS[i % MODEL_COLORS.length];
     const hasTokens = m.input > 0 || m.output > 0 || m.cacheRead > 0;
+    const isFilterActive = v.requestsModelFilter === m.name;
 
     html += '' +
-      '<div class="model-item">' +
+      '<div class="model-item' + (isFilterActive ? ' model-item-active-filter' : '') + '" data-request-model="' + escapeHtml(m.name) + '">' +
         '<div class="model-top">' +
           '<span class="model-name" title="' + escapeHtml(m.name) + '">' + escapeHtml(m.name) + '</span>' +
           '<span class="model-count" style="color:' + color + '">' + (m.calls || 0).toLocaleString() + '</span>' +
@@ -230,12 +251,21 @@ export function renderModelsTab(snapshot, view, actions) {
     (v.showAll ? '' : ' · showing ' + Math.min(6, rows.length)) +
   '</div>';
 
+  // Recent requests list (shown when requestsOpen is true)
+  if (v.requestsOpen) {
+    html += renderRequestList(snapshot, v);
+  }
+
   // Preserve input state before replacing innerHTML
   const prevFilterEl = document.getElementById('model-filter');
   const savedFilterValue = prevFilterEl?.value || '';
   const savedFilterFocused = prevFilterEl === document.activeElement;
   const savedSelectionStart = savedFilterFocused ? prevFilterEl.selectionStart : null;
   const savedSelectionEnd = savedFilterFocused ? prevFilterEl.selectionEnd : null;
+
+  // Preserve request list scroll position
+  const prevRequestList = container.querySelector('.request-list');
+  const savedRequestScrollTop = prevRequestList ? prevRequestList.scrollTop : 0;
 
   html += '</div>';
   container.innerHTML = html;
@@ -253,13 +283,87 @@ export function renderModelsTab(snapshot, view, actions) {
         }
       }
     }
+    // Restore request list scroll position
+    if (savedRequestScrollTop > 0) {
+      const newRequestList = container.querySelector('.request-list');
+      if (newRequestList) newRequestList.scrollTop = savedRequestScrollTop;
+    }
   }, 0);
+}
+
+/**
+ * Render the scrollable list of individual API request records.
+ * Records are filtered by the active range (24h/7d/all) and optionally
+ * by the requestsModelFilter (set when a model row is clicked).
+ */
+function renderRequestList(snapshot, v) {
+  const records = filterRecordsByRange(snapshot.usage_records, v.range);
+
+  // Apply model filter if active
+  let filtered = records;
+  if (v.requestsModelFilter) {
+    const mf = v.requestsModelFilter.toLowerCase();
+    filtered = records.filter(r => (r.model || '').toLowerCase() === mf);
+  }
+
+  // Sort newest-first
+  filtered.sort((a, b) => {
+    const ta = Date.parse(a.timeCreated || a.time_created) || 0;
+    const tb = Date.parse(b.timeCreated || b.time_created) || 0;
+    return tb - ta;
+  });
+
+  // Cap display at 50 entries (the backend already limits usage_records)
+  const display = filtered.slice(0, 50);
+
+  let html = '<div class="request-list">';
+  html += '<div class="request-list-header">' +
+    '<span>' + filtered.length + ' request' + (filtered.length !== 1 ? 's' : '') + '</span>' +
+    (v.requestsModelFilter ? ' <span class="request-list-filtered">in ' + escapeHtml(v.requestsModelFilter) + '</span>' : '') +
+  '</div>';
+
+  if (display.length === 0) {
+    html += '<div class="request-list-empty">No requests found for this range</div>';
+  } else {
+    display.forEach(r => {
+      const time = formatTimeAgo(r.timeCreated || r.time_created);
+      const model = r.model || 'unknown';
+      const provider = r.provider || '';
+      const inTok = r.inputTokens || 0;
+      const outTok = r.outputTokens || 0;
+      const cacheTok = r.cacheReadTokens || 0;
+      const cost = r.cost || 0;
+      const plan = r.enrichment?.plan || '';
+
+      html += '<div class="request-item">';
+      html += '<div class="request-item-top">';
+      html += '<span class="request-time">' + escapeHtml(time) + '</span>';
+      html += '<span class="request-model" title="' + escapeHtml(model) + '">' + escapeHtml(model) + '</span>';
+      if (plan) {
+        html += '<span class="request-plan-badge">' + escapeHtml(plan) + '</span>';
+      }
+      html += '</div>';
+      html += '<div class="request-item-meta">';
+      if (provider) html += '<span class="request-provider">' + escapeHtml(provider) + '</span>';
+      html += '<span class="request-tokens">IN ' + formatTokens(inTok) + ' / OUT ' + formatTokens(outTok);
+      if (cacheTok > 0) html += ' / CACHE ' + formatTokens(cacheTok);
+      html += '</span>';
+      html += '<span class="request-cost">' + formatCost(cost) + '</span>';
+      html += '</div>';
+      html += '</div>';
+    });
+  }
+
+  html += '</div>';
+  return html;
 }
 
 function bindModelControls(container, a) {
   const filterEl = container.querySelector('#model-filter');
   const sortEl = container.querySelector('#model-sort');
   const showAllBtn = container.querySelector('#model-show-all');
+  const requestsToggleBtn = container.querySelector('#model-requests-toggle');
+  const filterClearBtn = container.querySelector('#request-filter-clear');
 
   if (filterEl) {
     filterEl.addEventListener('input', debounce(() => {
@@ -268,10 +372,19 @@ function bindModelControls(container, a) {
   }
   if (sortEl) sortEl.addEventListener('change', () => { if (a.setSortBy) a.setSortBy(sortEl.value); });
   if (showAllBtn) showAllBtn.addEventListener('click', () => { if (a.toggleShowAll) a.toggleShowAll(); });
+  if (requestsToggleBtn) requestsToggleBtn.addEventListener('click', () => { if (a.toggleRequests) a.toggleRequests(); });
+  if (filterClearBtn) filterClearBtn.addEventListener('click', () => { if (a.setRequestsModelFilter) a.setRequestsModelFilter(''); });
 
   container.querySelectorAll('[data-model-range]').forEach(btn => {
     btn.addEventListener('click', () => {
       if (a.setRange) a.setRange(btn.dataset.modelRange);
+    });
+  });
+
+  // Model row click → toggle request filter by that model
+  container.querySelectorAll('[data-request-model]').forEach(el => {
+    el.addEventListener('click', () => {
+      if (a.setRequestsModelFilter) a.setRequestsModelFilter(el.dataset.requestModel);
     });
   });
 }

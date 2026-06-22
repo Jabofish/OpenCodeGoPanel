@@ -20,6 +20,7 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
         { value: 'system', label: 'Follow system' },
       ]) +
       buildToggle('setting-pin', 'Always on top', isPinned) +
+      buildToggle('setting-autostart', 'Launch on startup', settings.launchOnStartup) +
       buildToggle('setting-mini-badge', 'Mini badge mode', settings.miniBadgeMode) +
       buildSelect('setting-mini-badge-source', 'Mini badge source', settings.miniBadgeSource, [
         { value: 'auto', label: 'Auto (max of all)' },
@@ -118,6 +119,7 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
     '</div>';
 
   bindToggle('setting-pin', (value) => actions.setPinned(value));
+  bindToggle('setting-autostart', (value) => actions.setLaunchOnStartup(value));
   bindToggle('setting-auto-refresh', (value) => actions.setAutoRefresh(value));
   bindToggle('setting-compact', (value) => actions.setCompactMode(value));
   bindToggle('setting-mini-badge', (value) => actions.setMiniBadgeMode(value));

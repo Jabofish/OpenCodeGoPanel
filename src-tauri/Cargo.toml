@@ -1,6 +1,6 @@
 [package]
 name = "opencode-usage-panel"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2021"
 
 [[bin]]
@@ -22,6 +22,7 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-window-state = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-updater = "2"
+tauri-plugin-autostart = "2"
 base64 = "0.22.1"
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography", "Win32_System_Memory"] }
 

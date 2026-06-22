@@ -42,6 +42,8 @@ pub struct AppSettings {
     // Updates
     pub auto_update: bool,
     pub skipped_update_version: String,
+    // Startup
+    pub launch_on_startup: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -132,6 +134,7 @@ impl Default for AppSettings {
             auto_backup: true,
             auto_update: true,
             skipped_update_version: String::new(),
+            launch_on_startup: false,
         }
     }
 }

@@ -52,6 +52,9 @@
     "allow-check-for-update",
     "allow-download-update",
     "allow-install-update",
+    "allow-set-autostart",
+    "allow-get-autostart",
+    "autostart:default",
     "updater:default"
   ]
 }

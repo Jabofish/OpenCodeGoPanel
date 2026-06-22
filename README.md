@@ -18,6 +18,13 @@ A compact Windows desktop panel for monitoring OpenCode Go usage.
 npm run test:rust
 ```
 
+## Release 0.1.5
+
+- **Launch on startup (autostart toggle):** New setting in the Settings tab to launch the app on system startup, powered by `tauri-plugin-autostart`. The toggle state is reconciled with the OS registry on every startup to stay consistent even after reinstalls.
+- **Update download UI fix:** Clicking "Update now" now shows an immediate "Connecting…" state instead of a frozen button. The progress bar updates in-place without DOM rebuilds, eliminating flicker. The badge no longer collapses during download, and the double-render of the install prompt is fixed.
+- **Per-API-request data viewer:** The Models tab now includes a "Recent requests" toggle that reveals a scrollable list of individual API call records. Clicking a model row filters the list to that model. Each record shows time, model, provider, token breakdown, cost, and plan badge.
+- **Auto-detect login and auto-save:** After navigating to a workspace page in the login window, cookies are now extracted and saved automatically (with an 800 ms debounce for page settling). The manual button remains as a fallback, relabeled "Save login manually" and dimmed. A status line shows "Login detected — saving…" and "Saved ✓" feedback.
+
 ## Release 0.1.4
 
 - **Badge bubble notifications:** Collapsed badge now shows a WeChat-style chat bubble popping out to the right when toasts are triggered, replacing invisible inline toasts and intrusive OS notifications.

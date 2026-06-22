@@ -38,6 +38,7 @@ let refreshTimer = null;
 let snapshotTimer = null;
 let latestSnapshot = null;
 let latestRefreshState = null;
+let lastSnapshotSignature = '';
 let settings = loadSettings();
 let miniBadgeExpanded = false;
 let lastManualRefreshAt = 0;
@@ -52,6 +53,8 @@ let modelView = {
   sortBy: 'calls',
   showAll: false,
   range: 'all',
+  requestsOpen: false,
+  requestsModelFilter: '',
 };
 
 const modelActions = {
@@ -69,6 +72,14 @@ const modelActions = {
   },
   setRange: (range) => {
     modelView = { ...modelView, range };
+    renderModelsTab(latestSnapshot, modelView, modelActions);
+  },
+  toggleRequests: () => {
+    modelView = { ...modelView, requestsOpen: !modelView.requestsOpen };
+    renderModelsTab(latestSnapshot, modelView, modelActions);
+  },
+  setRequestsModelFilter: (model) => {
+    modelView = { ...modelView, requestsModelFilter: model === modelView.requestsModelFilter ? '' : model };
     renderModelsTab(latestSnapshot, modelView, modelActions);
   },
 };
@@ -234,6 +245,17 @@ const settingActions = {
   toggleFavoriteWorkspace: () => toggleFavoriteCurrentWorkspace(),
   setAutoBackup: (value) => updateSettings({ autoBackup: value }),
   setAutoUpdate: (value) => updateSettings({ autoUpdate: value }),
+  setLaunchOnStartup: async (value) => {
+    try {
+      await invoke('set_autostart', { enabled: value });
+      updateSettings({ launchOnStartup: value });
+    } catch (e) {
+      console.error('[Autostart] Failed:', e);
+      showToast('Failed to set launch-on-startup: ' + e, { type: 'error' });
+      // Revert the toggle by re-rendering settings with the old value
+      renderSettingsWithMaintenance(latestSnapshot);
+    }
+  },
   checkForUpdate: () => checkForUpdateManually(),
   generateReport: async (period) => {
     try {
@@ -275,6 +297,7 @@ function defaultSettings() {
     notificationCooldownMins: 60,
     autoUpdate: true,
     skippedUpdateVersion: '',
+    launchOnStartup: false,
     theme: 'system',
     reportFrequency: 'off',
     reportAutoGenerate: false,
@@ -554,6 +577,9 @@ function setupMiniBadge() {
 
   async function collapseMiniBadge() {
     if (!settings.miniBadgeMode) return;
+    // Defensive: never collapse while the update overlay (dialog, connecting,
+    // download progress, or install prompt) is visible.
+    if (isUpdateOverlayActive()) return;
     clearCollapseTimer();
     stopPointerWatch();
     hideBadgeBubble();
@@ -919,12 +945,28 @@ async function renderAll() {
 }
 
 function applySnapshot(snapshot) {
+  // Compute a lightweight signature to detect whether the actual data changed.
+  // last_updated changes only when the backend fetches new data; is_refreshing
+  // changes when a refresh cycle starts/ends. When neither changes, the
+  // snapshot is identical and we can skip the expensive tab re-renders.
+  const rs = snapshot.refresh_state;
+  const signature = (snapshot.last_updated || '') + '|' + !!(rs && rs.is_refreshing);
+  const dataChanged = signature !== lastSnapshotSignature;
+  lastSnapshotSignature = signature;
+
   latestSnapshot = snapshot;
-  latestRefreshState = snapshot.refresh_state || null;
-  latestInsights = deriveUsageInsights(snapshot, latestHistory, settings);
+  latestRefreshState = rs || null;
+
+  // These always update (lightweight DOM writes, needed for "Updated X ago"
+  // and spinner/refresh-state feedback even between data changes).
   updateFooter(snapshot);
   updateRefreshButton(snapshot);
   updateMiniBadge(snapshot);
+
+  if (!dataChanged) return;
+
+  // Data actually changed — do the full re-render.
+  latestInsights = deriveUsageInsights(snapshot, latestHistory, settings);
   renderUsageTab(snapshot, settings, latestInsights);
   renderModelsTab(snapshot, modelView, modelActions);
   renderTrendsTab(latestHistory, snapshot, settings, trendActions, historyDays);
@@ -1308,6 +1350,20 @@ async function init() {
       });
     } catch (e) {
       console.warn('[Init] set_refresh_intervals not available:', e);
+    }
+
+    // Reconcile launch-on-startup setting with the actual registry state.
+    // The OS registry is the source of truth (another tool or reinstall may
+    // have changed it), so reflect it into the settings UI on startup.
+    try {
+      const enabled = await invoke('get_autostart');
+      if (settings.launchOnStartup !== enabled) {
+        console.log('[Init] Reconciling launchOnStartup:', settings.launchOnStartup, '→', enabled);
+        settings.launchOnStartup = enabled;
+        localStorage.setItem('ocp-settings', JSON.stringify(settings));
+      }
+    } catch (e) {
+      console.warn('[Init] get_autostart not available:', e);
     }
 
     // Keyboard shortcuts: Quick Peek (Space/K), Esc to close, F12 devtools

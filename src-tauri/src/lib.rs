@@ -109,6 +109,8 @@ pub fn run() {
             commands::open_exports_folder,
             commands::run_health_check,
             commands::generate_report,
+            commands::set_autostart,
+            commands::get_autostart,
             updater::check_for_update,
             updater::download_update,
             updater::install_update,
@@ -121,6 +123,10 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .on_window_event(move |window, event| {
             // Only intercept close for the main window; login window closes normally.
             // This makes Alt+F4 / window-X hide to tray instead of quitting the app.
@@ -178,6 +184,23 @@ pub fn run() {
                 println!("[Backend] Starting scheduler...");
                 sched.start_adaptive().await;
             });
+
+            // Sync the autostart registry entry with the persisted setting on every
+            // launch, so the on-disk preference always wins (e.g. if the user toggled
+            // it off, or another tool cleared the registry entry).
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let autostart_mgr = app.autolaunch();
+                let want = settings_store.get().launch_on_startup;
+                let current = autostart_mgr.is_enabled().unwrap_or(false);
+                if want && !current {
+                    let _ = autostart_mgr.enable();
+                    println!("[Autostart] Re-enabled on startup (setting=on, registry=off)");
+                } else if !want && current {
+                    let _ = autostart_mgr.disable();
+                    println!("[Autostart] Disabled on startup (setting=off, registry=on)");
+                }
+            }
 
             // Check for updates in the background after a short delay
             let update_app = app.handle().clone();

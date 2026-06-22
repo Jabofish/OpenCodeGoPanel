@@ -13,6 +13,10 @@ let pendingUpdateInfo = null;
 let checkingToastId = null;
 let updateOverlayActive = false;
 
+// Download dialog state — tracks whether the progress dialog DOM has been
+// built so subsequent progress events patch in-place instead of rebuilding.
+let downloadDialogBuilt = false;
+
 /**
  * Initialize the updater event listener. Call once at app startup.
  */
@@ -45,6 +49,10 @@ export function initUpdater() {
         if (canShowInlineUI()) showDownloadProgress(payload.progress, payload.total);
         break;
       case 'downloaded':
+        // The downloaded event is the single source of truth for the
+        // install-ready transition. startDownload() no longer calls
+        // showInstallReady() directly, so there is no double-render.
+        downloadDialogBuilt = false;
         if (canShowInlineUI()) showInstallReady();
         break;
       case 'up-to-date':
@@ -55,6 +63,7 @@ export function initUpdater() {
         break;
       case 'error':
         if (checkingToastId) { dismissToast(checkingToastId); checkingToastId = null; }
+        downloadDialogBuilt = false;
         hideDialog();
         if (typeof showToast === 'function') {
           showToast(payload.message, { type: 'error' });
@@ -122,12 +131,17 @@ function showUpdateDialog(info) {
   document.getElementById('update-btn-later').addEventListener('click', hideDialog);
 }
 
-function showDownloadProgress(progress, total) {
+/**
+ * Show an immediate "Connecting…" state before the download actually starts.
+ * Called from startDownload() before invoking the backend command so the user
+ * gets instant feedback instead of a frozen button during the network handshake.
+ */
+function showDownloadConnecting() {
   const overlay = document.getElementById('update-overlay');
   if (!overlay) return;
 
-  const pct = Math.round(progress);
-  const sizeStr = total ? ' / ' + formatBytes(total) : '';
+  // Reset the dialog-built flag so the first progress event rebuilds the DOM
+  downloadDialogBuilt = false;
 
   overlay.innerHTML = '' +
     '<div class="update-dialog">' +
@@ -136,15 +150,49 @@ function showDownloadProgress(progress, total) {
         '<span>Downloading Update</span>' +
       '</div>' +
       '<div class="update-dialog-body">' +
-        '<div class="update-progress-bar">' +
-          '<div class="update-progress-fill" style="width:' + pct + '%"></div>' +
-        '</div>' +
-        '<div class="update-progress-text">' + pct + '%' + sizeStr + '</div>' +
+        '<div class="update-connecting-text">Connecting to download server&hellip;</div>' +
       '</div>' +
     '</div>';
 
   overlay.classList.add('visible');
   updateOverlayActive = true;
+}
+
+function showDownloadProgress(progress, total) {
+  const overlay = document.getElementById('update-overlay');
+  if (!overlay) return;
+
+  const pct = Math.round(progress);
+  const sizeStr = total ? ' / ' + formatBytes(total) : '';
+
+  // Build the dialog DOM only once; subsequent calls patch the fill width
+  // and text in-place, eliminating the flicker caused by full innerHTML
+  // rewrites firing dozens of times per second.
+  if (!downloadDialogBuilt) {
+    overlay.innerHTML = '' +
+      '<div class="update-dialog">' +
+        '<div class="update-dialog-header">' +
+          '<span class="update-dialog-icon">&#x2B07;</span>' +
+          '<span>Downloading Update</span>' +
+        '</div>' +
+        '<div class="update-dialog-body">' +
+          '<div class="update-progress-bar">' +
+              '<div class="update-progress-fill" style="width:' + pct + '%"></div>' +
+          '</div>' +
+          '<div class="update-progress-text">' + pct + '%' + sizeStr + '</div>' +
+        '</div>' +
+      '</div>';
+
+    overlay.classList.add('visible');
+    updateOverlayActive = true;
+    downloadDialogBuilt = true;
+  } else {
+    // In-place patch — only touch the two dynamic elements
+    const fill = overlay.querySelector('.update-progress-fill');
+    const text = overlay.querySelector('.update-progress-text');
+    if (fill) fill.style.width = pct + '%';
+    if (text) text.textContent = pct + '%' + sizeStr;
+  }
 }
 
 function showInstallReady() {
@@ -183,11 +231,20 @@ function hideDialog() {
 }
 
 async function startDownload() {
+  // Set overlay-active and show connecting state immediately so the badge
+  // cannot collapse during the network handshake and the user sees instant
+  // feedback instead of a frozen button.
+  updateOverlayActive = true;
+  showDownloadConnecting();
+
   try {
     await invoke('download_update');
-    // After download completes, show install prompt
-    showInstallReady();
+    // Do NOT call showInstallReady() here — the 'downloaded' event fired by
+    // the backend is the single source of truth for that transition. This
+    // removes the double-render that previously occurred when both the event
+    // handler and this function called showInstallReady().
   } catch (e) {
+    downloadDialogBuilt = false;
     hideDialog();
     if (typeof showToast === 'function') {
       showToast('Download failed: ' + e, { type: 'error' });

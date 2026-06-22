@@ -360,6 +360,27 @@ pub async fn save_settings(
 }
 
 #[tauri::command]
+pub async fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let mgr = app.autolaunch();
+    if enabled {
+        mgr.enable().map_err(|e| format!("Failed to enable autostart: {}", e))?;
+    } else {
+        mgr.disable().map_err(|e| format!("Failed to disable autostart: {}", e))?;
+    }
+    println!("[Autostart] {}: {}", if enabled { "enabled" } else { "disabled" }, mgr.is_enabled().unwrap_or(false));
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_autostart(app: AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|e| format!("Failed to query autostart: {}", e))
+}
+
+#[tauri::command]
 pub async fn set_refresh_intervals(
     scheduler: tauri::State<'_, Arc<RefreshScheduler>>,
     visible_secs: u64,
@@ -699,6 +720,8 @@ mod tests {
             "open_exports_folder",
             "run_health_check",
             "generate_report",
+            "set_autostart",
+            "get_autostart",
             "check_for_update",
             "download_update",
             "install_update",
