@@ -18,6 +18,11 @@ A compact Windows desktop panel for monitoring OpenCode Go usage.
 npm run test:rust
 ```
 
+## Release 0.1.6
+
+- **Fix budget cost calculation in Trends tab:** Corrected the cost alignment logic where past legacy entries (such as the one for `2026-06-21`) could record cumulative monthly costs instead of daily costs, leading to incorrect "Cost in Period" totals. History entries are now automatically corrected against daily cache data on refresh.
+- **Fix timezone boundary bug:** Uses the local timezone instead of UTC for formatting the "today" date key when recording daily snapshots, ensuring correct data alignment on day/month boundaries.
+
 ## Release 0.1.5
 
 - **Launch on startup (autostart toggle):** New setting in the Settings tab to launch the app on system startup, powered by `tauri-plugin-autostart`. The toggle state is reconciled with the OS registry on every startup to stay consistent even after reinstalls.

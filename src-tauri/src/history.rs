@@ -70,7 +70,7 @@ impl HistoryStore {
 
     /// Record today's snapshot into history. Updates existing entry for today or appends new.
     pub fn record(&self, snapshot: &AppDataSnapshot) {
-        let today = Utc::now().format("%Y-%m-%d").to_string();
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let workspace_id = snapshot.workspace_id.clone();
         let total_cost: i64 = snapshot.daily_costs.iter()
             .filter(|c| c.date == today)
@@ -96,6 +96,28 @@ impl HistoryStore {
                 *existing = entry;
             } else {
                 writer.push(entry);
+            }
+
+            // Align/correct history costs for all dates present in snapshot.daily_costs
+            // This corrects any past recording errors for the current month.
+            let mut cost_by_date: HashMap<String, i64> = HashMap::new();
+            for cost in &snapshot.daily_costs {
+                *cost_by_date.entry(cost.date.clone()).or_insert(0) += cost.total_cost;
+            }
+
+            for (date, cache_cost) in cost_by_date {
+                if let Some(existing) = writer
+                    .iter_mut()
+                    .find(|e| e.date == date && e.workspace_id == workspace_id)
+                {
+                    if existing.total_cost != cache_cost {
+                        println!(
+                            "[History] Aligning cost for date {} in workspace {}: {} -> {}",
+                            date, workspace_id, existing.total_cost, cache_cost
+                        );
+                        existing.total_cost = cache_cost;
+                    }
+                }
             }
 
             prune_and_sort_entries(&mut writer, Utc::now().date_naive(), DEFAULT_KEEP_DAYS);
