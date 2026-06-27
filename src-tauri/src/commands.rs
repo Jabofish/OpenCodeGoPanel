@@ -502,57 +502,145 @@ fn csv_cell(value: impl AsRef<str>) -> String {
     }
 }
 
-/// Parse a Ctrl+Shift+<letter> hotkey string into a key Code.
-/// Returns the Code on success, or an error message on failure.
+/// Parse a hotkey string such as `Ctrl+Shift+U` or `Alt+Space` into a Shortcut.
+///
+/// Accepts any combination of modifiers (Ctrl/Control, Shift, Alt/Option,
+/// Super/Meta/Win/Cmd/Command) plus exactly one key (A-Z, 0-9, F1-F12, Space,
+/// arrows, Home/End, etc.). Tokens are case-insensitive and order-insensitive.
+/// Returns the parsed Shortcut, or an error message on failure.
 pub(crate) fn shortcut_from_hotkey(hotkey: &str) -> Result<Shortcut, String> {
-    parse_ctrl_shift_letter_hotkey(hotkey)
-        .map(|code| Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), code))
+    let (mods, code) = parse_hotkey(hotkey)?;
+    Ok(Shortcut::new(Some(mods), code))
 }
 
-fn parse_ctrl_shift_letter_hotkey(hotkey: &str) -> Result<Code, String> {
-    let parts: Vec<&str> = hotkey.split('+').collect();
-    if parts.len() != 3 {
-        return Err("Invalid hotkey format. Use Ctrl+Shift+<key>".into());
+fn parse_hotkey(hotkey: &str) -> Result<(Modifiers, Code), String> {
+    let mut mods = Modifiers::empty();
+    let mut key: Option<Code> = None;
+
+    for raw in hotkey.split('+') {
+        let token = raw.trim();
+        if token.is_empty() {
+            continue;
+        }
+        if let Some(m) = parse_modifier_token(token) {
+            mods |= m;
+            continue;
+        }
+        if let Some(c) = parse_key_token(token) {
+            if key.is_some() {
+                return Err(format!(
+                    "Hotkey must contain exactly one key; '{}' is a second key",
+                    token
+                ));
+            }
+            key = Some(c);
+            continue;
+        }
+        return Err(format!("Unknown hotkey token: '{}'", token));
     }
-    // Validate modifier keys (case-insensitive)
-    let ctrl = parts[0].trim().to_lowercase();
-    let shift = parts[1].trim().to_lowercase();
-    if ctrl != "ctrl" || shift != "shift" {
-        return Err("Invalid modifiers. Use Ctrl+Shift+<key>".into());
+
+    let code = key.ok_or_else(|| "Hotkey must contain a key (e.g. Ctrl+Shift+U)".to_string())?;
+    if mods.is_empty() {
+        return Err("Hotkey must include at least one modifier (Ctrl/Shift/Alt/Super)".into());
     }
-    let key_char = parts[2].trim().to_uppercase();
-    if key_char.len() != 1 || !key_char.chars().next().unwrap().is_ascii_alphabetic() {
-        return Err("Hotkey key must be a single letter A-Z".into());
+    Ok((mods, code))
+}
+
+/// Map a modifier token (case-insensitive) to a Modifiers flag, or None.
+fn parse_modifier_token(token: &str) -> Option<Modifiers> {
+    match token.trim().to_lowercase().as_str() {
+        "ctrl" | "control" => Some(Modifiers::CONTROL),
+        "shift" => Some(Modifiers::SHIFT),
+        "alt" | "option" | "opt" => Some(Modifiers::ALT),
+        "super" | "meta" | "win" | "cmd" | "command" => Some(Modifiers::SUPER),
+        _ => None,
     }
-    match key_char.as_str() {
-        "A" => Ok(Code::KeyA),
-        "B" => Ok(Code::KeyB),
-        "C" => Ok(Code::KeyC),
-        "D" => Ok(Code::KeyD),
-        "E" => Ok(Code::KeyE),
-        "F" => Ok(Code::KeyF),
-        "G" => Ok(Code::KeyG),
-        "H" => Ok(Code::KeyH),
-        "I" => Ok(Code::KeyI),
-        "J" => Ok(Code::KeyJ),
-        "K" => Ok(Code::KeyK),
-        "L" => Ok(Code::KeyL),
-        "M" => Ok(Code::KeyM),
-        "N" => Ok(Code::KeyN),
-        "O" => Ok(Code::KeyO),
-        "P" => Ok(Code::KeyP),
-        "Q" => Ok(Code::KeyQ),
-        "R" => Ok(Code::KeyR),
-        "S" => Ok(Code::KeyS),
-        "T" => Ok(Code::KeyT),
-        "U" => Ok(Code::KeyU),
-        "V" => Ok(Code::KeyV),
-        "W" => Ok(Code::KeyW),
-        "X" => Ok(Code::KeyX),
-        "Y" => Ok(Code::KeyY),
-        "Z" => Ok(Code::KeyZ),
-        _ => Err("Unsupported key".into()),
+}
+
+// Lookup tables for single-character keys. `Code` has no `from(u8)`, so we
+// index these arrays instead of relying on enum discriminant arithmetic.
+const LETTER_KEYS: [Code; 26] = [
+    Code::KeyA, Code::KeyB, Code::KeyC, Code::KeyD, Code::KeyE, Code::KeyF,
+    Code::KeyG, Code::KeyH, Code::KeyI, Code::KeyJ, Code::KeyK, Code::KeyL,
+    Code::KeyM, Code::KeyN, Code::KeyO, Code::KeyP, Code::KeyQ, Code::KeyR,
+    Code::KeyS, Code::KeyT, Code::KeyU, Code::KeyV, Code::KeyW, Code::KeyX,
+    Code::KeyY, Code::KeyZ,
+];
+const DIGIT_KEYS: [Code; 10] = [
+    Code::Digit0, Code::Digit1, Code::Digit2, Code::Digit3, Code::Digit4,
+    Code::Digit5, Code::Digit6, Code::Digit7, Code::Digit8, Code::Digit9,
+];
+const FUNCTION_KEYS: [Code; 12] = [
+    Code::F1, Code::F2, Code::F3, Code::F4, Code::F5, Code::F6,
+    Code::F7, Code::F8, Code::F9, Code::F10, Code::F11, Code::F12,
+];
+
+/// Map a key token (case-insensitive) to a Code, or None. Accepts both the
+/// bare form (`A`, `0`, `Space`, `F1`, `Up`) and the canonical form
+/// (`KeyA`, `Digit0`, `ArrowUp`) used by the underlying `keyboard_types` crate.
+fn parse_key_token(token: &str) -> Option<Code> {
+    let upper = token.trim().to_uppercase();
+    if upper.is_empty() {
+        return None;
     }
+    let mut chars = upper.chars();
+    let first = chars.next()?;
+    let rest_len = upper.len() - first.len_utf8();
+
+    // Bare single character: letter or digit.
+    if rest_len == 0 {
+        if ('A'..='Z').contains(&first) {
+            return Some(LETTER_KEYS[(first as u8 - b'A') as usize]);
+        }
+        if ('0'..='9').contains(&first) {
+            return Some(DIGIT_KEYS[(first as u8 - b'0') as usize]);
+        }
+    }
+
+    // Canonical letter/digit forms: KeyA, Digit0.
+    if let Some(suffix) = upper.strip_prefix("KEY") {
+        if let Some(c) = suffix.chars().next() {
+            if suffix.len() == 1 && ('A'..='Z').contains(&c) {
+                return Some(LETTER_KEYS[(c as u8 - b'A') as usize]);
+            }
+        }
+    }
+    if let Some(suffix) = upper.strip_prefix("DIGIT") {
+        if let Some(c) = suffix.chars().next() {
+            if suffix.len() == 1 && ('0'..='9').contains(&c) {
+                return Some(DIGIT_KEYS[(c as u8 - b'0') as usize]);
+            }
+        }
+    }
+
+    // Function keys F1-F12 (and F13-F24 if the crate ever needs them).
+    if first == 'F' {
+        if let Ok(n) = upper[1..].parse::<usize>() {
+            if (1..=FUNCTION_KEYS.len()).contains(&n) {
+                return Some(FUNCTION_KEYS[n - 1]);
+            }
+        }
+    }
+
+    Some(match upper.as_str() {
+        "SPACE" => Code::Space,
+        "UP" | "ARROWUP" => Code::ArrowUp,
+        "DOWN" | "ARROWDOWN" => Code::ArrowDown,
+        "LEFT" | "ARROWLEFT" => Code::ArrowLeft,
+        "RIGHT" | "ARROWRIGHT" => Code::ArrowRight,
+        "HOME" => Code::Home,
+        "END" => Code::End,
+        "PAGEUP" | "PGUP" => Code::PageUp,
+        "PAGEDOWN" | "PGDN" => Code::PageDown,
+        "INSERT" | "INS" => Code::Insert,
+        "DELETE" | "DEL" => Code::Delete,
+        "BACKSPACE" | "BACK" => Code::Backspace,
+        "ENTER" | "RETURN" => Code::Enter,
+        "TAB" => Code::Tab,
+        "ESCAPE" | "ESC" => Code::Escape,
+        "CAPSLOCK" | "CAPS" => Code::CapsLock,
+        _ => return None,
+    })
 }
 
 #[tauri::command]
@@ -652,35 +740,107 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_valid_ctrl_shift_letter() {
-        assert!(parse_ctrl_shift_letter_hotkey("Ctrl+Shift+U").is_ok());
-        assert!(parse_ctrl_shift_letter_hotkey("ctrl+shift+a").is_ok());
-        assert!(parse_ctrl_shift_letter_hotkey("Ctrl+Shift+Z").is_ok());
+    fn parse_legacy_default_still_works() {
+        let (mods, code) = parse_hotkey("Ctrl+Shift+U").unwrap();
+        assert_eq!(code, Code::KeyU);
+        assert!(mods.contains(Modifiers::CONTROL));
+        assert!(mods.contains(Modifiers::SHIFT));
         assert!(shortcut_from_hotkey("Ctrl+Shift+K").is_ok());
     }
 
     #[test]
-    fn rejects_alt_instead_of_ctrl() {
-        assert!(parse_ctrl_shift_letter_hotkey("Alt+Shift+U").is_err());
+    fn parse_alt_p() {
+        let (mods, code) = parse_hotkey("Alt+P").unwrap();
+        assert_eq!(code, Code::KeyP);
+        assert!(mods.contains(Modifiers::ALT));
+        assert!(!mods.contains(Modifiers::CONTROL));
     }
 
     #[test]
-    fn rejects_digit_key() {
-        assert!(parse_ctrl_shift_letter_hotkey("Ctrl+Shift+1").is_err());
-        assert!(parse_ctrl_shift_letter_hotkey("Ctrl+Shift+9").is_err());
+    fn parse_ctrl_space() {
+        let (mods, code) = parse_hotkey("Ctrl+Space").unwrap();
+        assert_eq!(code, Code::Space);
+        assert!(mods.contains(Modifiers::CONTROL));
     }
 
     #[test]
-    fn rejects_missing_modifier() {
-        assert!(parse_ctrl_shift_letter_hotkey("Ctrl+U").is_err());
-        assert!(parse_ctrl_shift_letter_hotkey("Shift+U").is_err());
+    fn parse_super_u() {
+        let (mods, code) = parse_hotkey("Super+U").unwrap();
+        assert_eq!(code, Code::KeyU);
+        assert!(mods.contains(Modifiers::SUPER));
     }
 
     #[test]
-    fn rejects_empty_and_garbage() {
-        assert!(parse_ctrl_shift_letter_hotkey("").is_err());
-        assert!(parse_ctrl_shift_letter_hotkey("foo").is_err());
-        assert!(parse_ctrl_shift_letter_hotkey("Ctrl+Shift++").is_err());
+    fn parse_ctrl_shift_alt_k() {
+        let (mods, code) = parse_hotkey("Ctrl+Shift+Alt+K").unwrap();
+        assert_eq!(code, Code::KeyK);
+        assert!(mods.contains(Modifiers::CONTROL));
+        assert!(mods.contains(Modifiers::SHIFT));
+        assert!(mods.contains(Modifiers::ALT));
+    }
+
+    #[test]
+    fn parse_is_order_insensitive_and_case_insensitive() {
+        // Reversed order, mixed case, alternate modifier spellings.
+        let (mods, code) = parse_hotkey("k+shift+Control").unwrap();
+        assert_eq!(code, Code::KeyK);
+        assert!(mods.contains(Modifiers::CONTROL));
+        assert!(mods.contains(Modifiers::SHIFT));
+
+        let (mods, code) = parse_hotkey("p+opt").unwrap();
+        assert_eq!(code, Code::KeyP);
+        assert!(mods.contains(Modifiers::ALT));
+
+        let (mods, code) = parse_hotkey("win+f1").unwrap();
+        assert_eq!(code, Code::F1);
+        assert!(mods.contains(Modifiers::SUPER));
+    }
+
+    #[test]
+    fn parse_digits_and_canonical_forms() {
+        let (_, code) = parse_hotkey("Ctrl+5").unwrap();
+        assert_eq!(code, Code::Digit5);
+
+        let (_, code) = parse_hotkey("Ctrl+Digit0").unwrap();
+        assert_eq!(code, Code::Digit0);
+
+        let (_, code) = parse_hotkey("Ctrl+KeyZ").unwrap();
+        assert_eq!(code, Code::KeyZ);
+
+        let (_, code) = parse_hotkey("Ctrl+F12").unwrap();
+        assert_eq!(code, Code::F12);
+    }
+
+    #[test]
+    fn parse_arrow_and_nav_keys() {
+        assert_eq!(parse_hotkey("Ctrl+Up").unwrap().1, Code::ArrowUp);
+        assert_eq!(parse_hotkey("Ctrl+ArrowDown").unwrap().1, Code::ArrowDown);
+        assert_eq!(parse_hotkey("Ctrl+Home").unwrap().1, Code::Home);
+        assert_eq!(parse_hotkey("Ctrl+PageUp").unwrap().1, Code::PageUp);
+    }
+
+    #[test]
+    fn rejects_bare_key_without_modifier() {
+        // A key alone is not a valid global shortcut.
+        assert!(parse_hotkey("U").is_err());
+        assert!(parse_hotkey("A").is_err());
+        assert!(parse_hotkey("Space").is_err());
+        assert!(parse_hotkey("F5").is_err());
+    }
+
+    #[test]
+    fn rejects_two_keys() {
+        assert!(parse_hotkey("Ctrl+A+B").is_err());
+        assert!(parse_hotkey("Space+Ctrl+A").is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_token_and_garbage() {
+        assert!(parse_hotkey("").is_err());
+        assert!(parse_hotkey("foo").is_err());
+        assert!(parse_hotkey("Ctrl+Foo").is_err());
+        assert!(parse_hotkey("Ctrl+Shift++").is_err());
+        assert!(parse_hotkey("Ctrl+").is_err());
     }
 
     /// Verify that every Tauri command registered in build.rs has a matching

@@ -1,7 +1,7 @@
 import { escapeHtml } from './format.js';
 import { buildHealthCheckStatus, buildLocalDataStatus } from './settings-diagnostics.js';
 
-export function renderSettingsTab(snapshot, settings, actions, isPinned, localDataStatus, healthCheck) {
+export function renderSettingsTab(snapshot, settings, actions, isPinned, localDataStatus, healthCheck, advancedOpen = false) {
   const container = document.getElementById('tab-settings');
   if (!container) return;
 
@@ -11,7 +11,51 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
   const taskbarStatus = 'Hidden';
   const effectiveHealthCheck = healthCheck || snapshot?.healthCheck || localDataStatus?.healthCheck || null;
 
-  container.innerHTML = '' +
+  // Less-frequently used groups (Hotkey, Reports, Updates, Local Data & Health)
+  // are tucked into an "Advanced settings" collapsible, closed by default.
+  const advancedHtml =
+    '<div class="settings-group">' +
+      '<div class="settings-title">Hotkey</div>' +
+      buildStatus('Current', escapeHtml(settings.hotkeyRecording ? 'Press shortcut...' : (settings.hotkey || 'Ctrl+Shift+U'))) +
+      buildAction('setting-hotkey-record', settings.hotkeyRecording ? 'Recording...' : 'Record shortcut') +
+    '</div>' +
+    '<div class="settings-group">' +
+      '<div class="settings-title">Reports</div>' +
+      buildSelect('setting-report-frequency', 'Report frequency', settings.reportFrequency || 'off', [
+        { value: 'off', label: 'Off' },
+        { value: 'daily', label: 'Daily' },
+        { value: 'weekly', label: 'Weekly' },
+        { value: 'monthly', label: 'Monthly' },
+      ]) +
+      buildToggle('setting-report-auto', 'Auto generate', settings.reportAutoGenerate) +
+      buildAction('setting-generate-report', 'Generate report now') +
+    '</div>' +
+    '<div class="settings-group">' +
+      '<div class="settings-title">Updates</div>' +
+      buildToggle('setting-auto-update', 'Auto check updates', settings.autoUpdate !== false) +
+      buildAction('setting-check-update', 'Check for updates now') +
+    '</div>' +
+    '<div class="settings-group">' +
+      '<div class="settings-title">Local Data & Health</div>' +
+      buildToggle('setting-auto-backup', 'Auto backup (daily, keep 7)', settings.autoBackup !== false) +
+      '<div class="settings-diagnostics">' +
+        buildLocalDataStatus(localDataStatus) +
+        buildHealthCheckStatus(effectiveHealthCheck, snapshot) +
+        '<div class="settings-diagnostic-actions">' +
+          buildAction('setting-refresh-local-data', 'Refresh data status', !!actions?.refreshLocalDataStatus, 'settings-diagnostic-action') +
+          buildAction('setting-run-health-check', 'Run health check', !!actions?.runHealthCheck, 'settings-diagnostic-action') +
+          buildAction('setting-open-exports', 'Open exports folder', true, 'settings-diagnostic-action') +
+          buildAction('setting-backup', 'Backup settings/history', true, 'settings-diagnostic-action') +
+          buildAction('setting-export-json', 'Export snapshot JSON', true, 'settings-diagnostic-action') +
+          buildAction('setting-export-records', 'Export usage CSV', true, 'settings-diagnostic-action') +
+          buildAction('setting-export-costs', 'Export costs CSV', true, 'settings-diagnostic-action') +
+          buildAction('setting-clear-exports', 'Clear exports', true, 'settings-diagnostic-action danger') +
+          buildAction('setting-clear-history', 'Clear history', true, 'settings-diagnostic-action danger') +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+  container.innerHTML =
     '<div class="settings-group">' +
       '<div class="settings-title">Window</div>' +
       buildSelect('setting-theme', 'Theme', settings.theme || 'system', [
@@ -69,11 +113,6 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
       buildAction('setting-test-notification', 'Test notification') +
     '</div>' +
     '<div class="settings-group">' +
-      '<div class="settings-title">Hotkey</div>' +
-      buildStatus('Current', escapeHtml(settings.hotkeyRecording ? 'Press shortcut...' : (settings.hotkey || 'Ctrl+Shift+U'))) +
-      buildAction('setting-hotkey-record', settings.hotkeyRecording ? 'Recording...' : 'Record shortcut') +
-    '</div>' +
-    '<div class="settings-group">' +
       '<div class="settings-title">Account</div>' +
       buildStatus('Workspace', escapeHtml(workspace)) +
       buildStatus('Workspace ID', escapeHtml(snapshot?.workspace_id || 'Not set')) +
@@ -82,42 +121,9 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
       buildAction('setting-login', 'Log in') +
       buildAction('setting-clear-auth', 'Clear login') +
     '</div>' +
-    '<div class="settings-group">' +
-      '<div class="settings-title">Reports</div>' +
-      buildSelect('setting-report-frequency', 'Report frequency', settings.reportFrequency || 'off', [
-        { value: 'off', label: 'Off' },
-        { value: 'daily', label: 'Daily' },
-        { value: 'weekly', label: 'Weekly' },
-        { value: 'monthly', label: 'Monthly' },
-      ]) +
-      buildToggle('setting-report-auto', 'Auto generate', settings.reportAutoGenerate) +
-      buildAction('setting-generate-report', 'Generate report now') +
-    '</div>' +
-    '<div class="settings-group">' +
-      '<div class="settings-title">Updates</div>' +
-      buildToggle('setting-auto-update', 'Auto check updates', settings.autoUpdate !== false) +
-      buildAction('setting-check-update', 'Check for updates now') +
-    '</div>' +
-    '<div class="settings-group">' +
-      '<div class="settings-title">Local Data & Health</div>' +
-      buildToggle('setting-auto-backup', 'Auto backup (daily, keep 7)', settings.autoBackup !== false) +
-      '<div class="settings-diagnostics">' +
-        buildLocalDataStatus(localDataStatus) +
-        buildHealthCheckStatus(effectiveHealthCheck, snapshot) +
-        '<div class="settings-diagnostic-actions">' +
-          buildAction('setting-refresh-local-data', 'Refresh data status', !!actions?.refreshLocalDataStatus, 'settings-diagnostic-action') +
-          buildAction('setting-run-health-check', 'Run health check', !!actions?.runHealthCheck, 'settings-diagnostic-action') +
-          buildAction('setting-open-exports', 'Open exports folder', true, 'settings-diagnostic-action') +
-          buildAction('setting-backup', 'Backup settings/history', true, 'settings-diagnostic-action') +
-          buildAction('setting-export-json', 'Export snapshot JSON', true, 'settings-diagnostic-action') +
-          buildAction('setting-export-records', 'Export usage CSV', true, 'settings-diagnostic-action') +
-          buildAction('setting-export-costs', 'Export costs CSV', true, 'settings-diagnostic-action') +
-          buildAction('setting-clear-exports', 'Clear exports', true, 'settings-diagnostic-action danger') +
-          buildAction('setting-clear-history', 'Clear history', true, 'settings-diagnostic-action danger') +
-        '</div>' +
-      '</div>' +
-    '</div>';
+    buildCollapsibleSection('setting-advanced', 'Advanced settings', advancedOpen, advancedHtml);
 
+  bindAction('setting-advanced-toggle', actions.toggleAdvanced);
   bindToggle('setting-pin', (value) => actions.setPinned(value));
   bindToggle('setting-autostart', (value) => actions.setLaunchOnStartup(value));
   bindToggle('setting-auto-refresh', (value) => actions.setAutoRefresh(value));
@@ -174,6 +180,21 @@ function buildToggle(id, label, checked) {
     '<span>' + escapeHtml(label) + '</span>' +
     '<input id="' + id + '" type="checkbox"' + (checked ? ' checked' : '') + '>' +
     '<span class="switch"></span></label>';
+}
+
+/**
+ * Collapsible section (like the Models "Recent requests" pattern).
+ * The toggle button is always rendered; the body is only rendered when open,
+ * so closed sections avoid creating bindings for their inner controls.
+ */
+function buildCollapsibleSection(id, title, open, bodyHtml) {
+  return '<div class="settings-collapsible' + (open ? ' open' : '') + '">' +
+    '<button id="' + id + '-toggle" type="button" class="settings-collapsible-toggle' + (open ? ' active' : '') + '">' +
+      '<span class="settings-collapsible-arrow">' + (open ? '&#x25BC;' : '&#x25B6;') + '</span>' +
+      '<span>' + escapeHtml(title) + '</span>' +
+    '</button>' +
+    (open ? '<div class="settings-collapsible-body">' + bodyHtml + '</div>' : '') +
+  '</div>';
 }
 function buildStatus(label, value) {
   return '<div class="setting-row"><span>' + escapeHtml(label) + '</span><strong>' + value + '</strong></div>';

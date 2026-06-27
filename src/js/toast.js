@@ -94,7 +94,6 @@ async function showBadgeBubble(message, type) {
   const bubbleLeft = isDot ? 40 : isRing ? 92 : 72;
   const BUBBLE_MAX_W = 180;
   const WIN_W = bubbleLeft + BUBBLE_MAX_W + 12;
-  const WIN_H = 70;
 
   try {
     // Save current position (logical)
@@ -122,6 +121,21 @@ async function showBadgeBubble(message, type) {
     document.documentElement.classList.add('badge-bubble-active');
     document.body.classList.add('badge-bubble-active');
 
+    // Create the bubble first (hidden) so we can measure its natural height
+    // and size the window to fit the wrapped text. A fixed window height
+    // clipped long messages; this lets multi-line errors show in full.
+    const bubble = document.createElement('div');
+    bubble.id = 'badge-bubble';
+    bubble.className = 'badge-bubble badge-bubble-' + type;
+    bubble.textContent = message;
+    document.body.appendChild(bubble);
+
+    // offsetHeight reflects layout height (transform/opacity don't affect it)
+    const bubbleH = bubble.offsetHeight || 40;
+    // Window height = bubble height + vertical padding/margin, clamped so a
+    // runaway error string can't blow the window up too tall.
+    const WIN_H = Math.max(70, Math.min(bubbleH + 20, 200));
+
     // Resize window: badge on left, bubble on right
     // Follow the same pattern as resizeWindowForMiniBadge (no setResizable)
     win.setMaxSize?.(null);
@@ -148,13 +162,6 @@ async function showBadgeBubble(message, type) {
         await win.setPosition({ type: 'Logical', data: { x: newX, y: newY } });
       }
     }
-
-    // Create bubble element (CSS positions it to the right of badge)
-    const bubble = document.createElement('div');
-    bubble.id = 'badge-bubble';
-    bubble.className = 'badge-bubble badge-bubble-' + type;
-    bubble.textContent = message;
-    document.body.appendChild(bubble);
 
     // Trigger animation
     setTimeout(() => bubble.classList.add('badge-bubble-show'), 10);

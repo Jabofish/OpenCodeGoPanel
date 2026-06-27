@@ -368,6 +368,12 @@ impl RefreshScheduler {
                 // Record today's entry
                 records_history.record(&snapshot);
 
+                // Refresh the dynamic tray icon + tooltip from the new snapshot.
+                // Errors are non-fatal — a tray update must never break refresh.
+                if let Some(ref app) = spawn_app_handle {
+                    let _ = crate::tray_icon::update_tray(app, &snapshot);
+                }
+
                 // Budget projection & cost spike notifications
                 let settings = spawn_settings.get();
 

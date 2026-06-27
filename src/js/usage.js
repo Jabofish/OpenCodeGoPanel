@@ -13,6 +13,7 @@ export function renderUsageTab(snapshot, settings, insights) {
   const rolling = u.rolling || {};
   const weekly = u.weekly || {};
   const monthly = u.monthly || {};
+  const deltas = insights?.deltas || {};
 
   const ws = (snapshot.workspaces || []).find(w => w.id === snapshot.workspace_id);
   const wsName = ws?.name || snapshot.workspace_id || 'Not set';
@@ -52,7 +53,7 @@ export function renderUsageTab(snapshot, settings, insights) {
         '<span>Rolling' + (overThreshold ? ' ⚠' : '') + '</span>' +
         '<strong>' + formatCountdown(rolling.reset_in_sec || 0) + '</strong>' +
       '</div>' +
-      '<div class="usage-hero-value">' + rollingPct + '<span>%</span></div>' +
+      '<div class="usage-hero-value">' + rollingPct + '<span>%</span>' + deltaBadge(deltas.rolling, 'vs yesterday') + '</div>' +
       '<div class="bar usage-main-bar">' +
         '<div class="bar-fill ' + barClass + '" style="width:' + Math.min(rollingPct, 100) + '%"></div>' +
       '</div>' +
@@ -71,8 +72,8 @@ export function renderUsageTab(snapshot, settings, insights) {
   }
 
   html += '<div class="quota-strip">';
-  html += buildQuotaPill('Weekly', weekly, 'bar-weekly');
-  html += buildQuotaPill('Monthly', monthly, 'bar-monthly');
+  html += buildQuotaPill('Weekly', weekly, 'bar-weekly', deltas.weekly, 'vs last week');
+  html += buildQuotaPill('Monthly', monthly, 'bar-monthly', deltas.monthly, 'vs last month');
   html += '</div>';
 
   const budget = settings?.monthlyBudget || 0;
@@ -143,7 +144,15 @@ export function renderUsageTab(snapshot, settings, insights) {
   }
 }
 
-function buildQuotaPill(label, period, barClass) {
+function deltaBadge(delta, label) {
+  if (!delta) return '';
+  const arrow = delta.direction === 'up' ? '↗' : delta.direction === 'down' ? '↘' : '→';
+  const val = Math.round(delta.value);
+  const text = (val > 0 ? '+' : '') + val;
+  return '<span class="usage-delta ' + delta.direction + '" title="' + escapeHtml(label) + '">' + arrow + ' ' + text + '%</span>';
+}
+
+function buildQuotaPill(label, period, barClass, delta, deltaLabel) {
   if (!period) return '';
 
   const pct = period.usage_percent || 0;
@@ -151,7 +160,7 @@ function buildQuotaPill(label, period, barClass) {
 
   return '' +
     '<div class="quota-pill">' +
-      '<div class="quota-pill-top"><span>' + label + '</span><strong>' + pct + '%</strong></div>' +
+      '<div class="quota-pill-top"><span>' + label + '</span><strong>' + pct + '%</strong>' + deltaBadge(delta, deltaLabel) + '</div>' +
       '<div class="quota-reset">' + resetIn + '</div>' +
       '<div class="bar"><div class="bar-fill ' + barClass + '" style="width:' + Math.min(pct, 100) + '%"></div></div>' +
     '</div>';

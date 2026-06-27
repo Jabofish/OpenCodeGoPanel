@@ -4,19 +4,40 @@ A compact Windows desktop panel for monitoring OpenCode Go usage.
 
 ## Features
 
-- Shows rolling, weekly, and monthly quota usage.
-- Tracks model usage and token totals.
-- Displays monthly spend against a configurable budget.
-- Supports multiple workspaces, tray hiding, always-on-top mode, and a global hotkey.
+- Rolling, weekly, and monthly quota usage with period-over-period trend badges.
+- Model usage and token breakdown, including reasoning (thinking) tokens for deep-thinking models.
+- Monthly spend against a configurable budget, with projection and budget-pace tracking.
+- Mini badge mode with double-click expansion, plus a Quick Peek hotkey overlay.
+- Multiple workspaces, tray hiding, always-on-top, a dynamic tray icon, and a customizable global hotkey.
+- Trend charts (7/30/90-day) and Markdown usage reports.
+- Built-in auto-update checker with signed releases.
+- Local data backup, export, storage status, and health diagnostics.
 - Uses the OpenCode web login flow and stores cookies locally.
-- **New:** Mini badge mode with double-click expansion for compact desktop presence.
-- Includes local data backup, export, storage status, and health diagnostics.
 
 ## Development
 
+Requires [Node.js](https://nodejs.org/) and [Rust](https://www.rust-lang.org/).
+
 ```bash
-npm run test:rust
+npm install            # install frontend dependencies
+npm run tauri dev      # run the app in development
+npm run tauri build    # build a Windows installer
+npm run test:rust      # run the Rust unit tests
 ```
+
+## Release 0.1.7
+
+- **Reasoning token visualization:** The Models tab now aggregates `reasoning_tokens` from deep-thinking models and surfaces them as a purple "THINK" chip inside each model's output tokens, plus a Reasoning row in the Token Summary. A new "Reasoning" sort option ranks models by thinking-token volume.
+- **Calls/Cost quick toggle:** A segmented Calls/Cost control above the model list ranks models in one click and stays in sync with the sort dropdown.
+- **Period-over-period usage deltas:** The Usage tab shows ↗/↘/→ trend badges next to rolling (vs yesterday), weekly (vs last week), and monthly (vs last month) percentages, computed from persisted history and refreshed on every backend refresh.
+- **Dynamic tray icon:** The system tray icon is now a pixel-rendered 64×64 ring that fills and color-shifts (blue → orange → red) with rolling usage and shows the percent using a built-in 5×7 bitmap font — no image or font crates, no emoji. It updates after every refresh.
+- **Enhanced tray tooltip:** Hovering the tray shows a compact multi-line summary (Rolling / Weekly / Monthly / today's cost), kept within the Windows tooltip length limit.
+- **Autostart on by default:** New installs now launch on system startup by default; the existing Settings toggle remains for opt-out.
+- **Flexible global hotkey:** The recorder and backend parser now accept any modifier combination (Ctrl/Alt/Shift/Super) plus any key (letters, digits, F1–F12, Space, arrows, navigation keys), case- and order-insensitive. Known Windows-conflicting combos (Alt+Space, Ctrl+Space, Super+letter) trigger a soft warning instead of a hard block. Default remains Ctrl+Shift+U.
+- **Quick Peek overhaul:** The hotkey overlay now closes on outside-click, shows full rolling/weekly/monthly plus today/projection costs, a budget-pace bar, the primary risk insight, and a last-updated timestamp.
+- **Settings reorganization:** Hotkey, Reports, Updates, and Local Data & Health groups are tucked into a collapsible "Advanced settings" section (closed by default) to keep the main settings view focused.
+- **Badge bubble auto-height:** Notification bubbles now size the window to fit wrapped multi-line messages (clamped to 200px) instead of clipping long error text.
+- **Diagnostics cleanup:** Health rows no longer show a duplicate value when it matches the status pill text.
 
 ## Release 0.1.6
 

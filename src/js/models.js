@@ -42,6 +42,7 @@ export function aggregateModelRows(snapshot, range = 'all') {
         percentage: m.percentage || 0,
         input: 0,
         output: 0,
+        reasoning: 0,
         cacheRead: 0,
         cacheWrite5m: 0,
         cacheWrite1h: 0,
@@ -61,6 +62,7 @@ export function aggregateModelRows(snapshot, range = 'all') {
         percentage: 0,
         input: 0,
         output: 0,
+        reasoning: 0,
         cacheRead: 0,
         cacheWrite5m: 0,
         cacheWrite1h: 0,
@@ -77,6 +79,7 @@ export function aggregateModelRows(snapshot, range = 'all') {
 
     row.input += r.inputTokens || 0;
     row.output += r.outputTokens || 0;
+    row.reasoning += r.reasoningTokens || 0;
     row.cacheRead += r.cacheReadTokens || 0;
     row.cacheWrite5m += r.cacheWrite5mTokens || 0;
     row.cacheWrite1h += r.cacheWrite1hTokens || 0;
@@ -109,6 +112,7 @@ const SORT_FNS = {
   cost: (a, b) => b.cost - a.cost || a.name.localeCompare(b.name),
   input: (a, b) => b.input - a.input || a.name.localeCompare(b.name),
   output: (a, b) => b.output - a.output || a.name.localeCompare(b.name),
+  reasoning: (a, b) => b.reasoning - a.reasoning || a.name.localeCompare(b.name),
   cache: (a, b) => b.cacheRead - a.cacheRead || a.name.localeCompare(b.name),
   cacheRate: (a, b) => b.cacheRate - a.cacheRate || a.name.localeCompare(b.name),
 };
@@ -156,6 +160,7 @@ export function renderModelsTab(snapshot, view, actions) {
     { value: 'cost', label: 'Cost' },
     { value: 'input', label: 'Input' },
     { value: 'output', label: 'Output' },
+    { value: 'reasoning', label: 'Reasoning' },
     { value: 'cache', label: 'Cache' },
     { value: 'cacheRate', label: 'Cache rate' },
   ].forEach(opt => {
@@ -170,11 +175,14 @@ export function renderModelsTab(snapshot, view, actions) {
   html += '</div>';
   html += '</div>';
 
-  // Row 2: recent requests toggle + show all
+  // Row 2: primary sort toggle (Calls / Cost) + show all
   html += '<div class="model-controls-row">';
-  html += '<button id="model-requests-toggle" class="model-requests-btn' + (v.requestsOpen ? ' active' : '') + '">' +
-    (v.requestsOpen ? '&#x25BC; Recent requests' : '&#x25B6; Recent requests') +
-  '</button>';
+  html += '<div class="trend-range cols-2" style="margin-bottom:0">';
+  ['calls','cost'].forEach(s => {
+    html += '<button class="trend-range-btn' + (v.sortBy === s ? ' active' : '') +
+      '" data-model-sort="' + s + '">' + (s === 'calls' ? 'Calls' : 'Cost') + '</button>';
+  });
+  html += '</div>';
   html += '<button id="model-show-all" class="model-show-all-btn">' + (v.showAll ? 'Show Less' : 'Show All') + '</button>';
   html += '</div>';
 
@@ -195,7 +203,7 @@ export function renderModelsTab(snapshot, view, actions) {
 
   visible.forEach((m, i) => {
     const color = MODEL_COLORS[i % MODEL_COLORS.length];
-    const hasTokens = m.input > 0 || m.output > 0 || m.cacheRead > 0;
+    const hasTokens = m.input > 0 || m.output > 0 || m.cacheRead > 0 || m.reasoning > 0;
     const isFilterActive = v.requestsModelFilter === m.name;
 
     html += '' +
@@ -217,7 +225,9 @@ export function renderModelsTab(snapshot, view, actions) {
       html += '' +
         '<div class="model-tokens">' +
           '<span class="tok-in" title="Input tokens">IN ' + formatTokens(m.input) + '</span>' +
-          '<span class="tok-out" title="Output tokens">OUT ' + formatTokens(m.output) + '</span>' +
+          '<span class="tok-out" title="Output tokens">OUT ' + formatTokens(m.output) +
+            (m.reasoning > 0 ? ' <span class="tok-reasoning" title="Reasoning tokens">THINK ' + formatTokens(m.reasoning) + '</span>' : '') +
+          '</span>' +
           '<span class="tok-cache" title="Cache read · ' + cacheRate.toFixed(1) + '% hit rate">CACHE ' + formatTokens(m.cacheRead) + ' · ' + cacheRate.toFixed(1) + '%</span>' +
         '</div>';
     }
@@ -226,11 +236,12 @@ export function renderModelsTab(snapshot, view, actions) {
   });
 
   // Token summary (filtered by range like visible rows)
-  let totalInput = 0, totalOutput = 0, totalCacheRead = 0;
+  let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalReasoning = 0;
   for (const r of filtered) {
     totalInput += r.input;
     totalOutput += r.output;
     totalCacheRead += r.cacheRead;
+    totalReasoning += r.reasoning || 0;
   }
   const totalTokens = totalInput + totalOutput + totalCacheRead;
   const cacheRate = totalTokens > 0 ? (totalCacheRead / totalTokens * 100) : 0;
@@ -241,6 +252,7 @@ export function renderModelsTab(snapshot, view, actions) {
         '<div class="token-summary-title">Token Summary</div>' +
         '<div class="token-row"><span>Input</span><strong>' + formatTokens(totalInput) + '</strong></div>' +
         '<div class="token-row"><span>Output</span><strong>' + formatTokens(totalOutput) + '</strong></div>' +
+        (totalReasoning > 0 ? '<div class="token-row"><span>Reasoning</span><strong class="tok-reasoning">' + formatTokens(totalReasoning) + '</strong></div>' : '') +
         '<div class="token-row"><span>Cache Read</span><strong>' + formatTokens(totalCacheRead) + '</strong></div>' +
         '<div class="token-row token-rate-row"><span>Cache Hit Rate</span><strong class="cache-rate">' + cacheRate.toFixed(1) + '%</strong></div>' +
       '</div>';
@@ -251,10 +263,17 @@ export function renderModelsTab(snapshot, view, actions) {
     (v.showAll ? '' : ' · showing ' + Math.min(6, rows.length)) +
   '</div>';
 
+  // Recent requests toggle — placed right above the request list so the
+  // control sits next to the records it expands/collapses.
+  html += '<div class="recent-requests-section">';
+  html += '<button id="model-requests-toggle" class="model-requests-btn' + (v.requestsOpen ? ' active' : '') + '">' +
+    (v.requestsOpen ? '&#x25BC; Recent requests' : '&#x25B6; Recent requests') +
+  '</button>';
   // Recent requests list (shown when requestsOpen is true)
   if (v.requestsOpen) {
     html += renderRequestList(snapshot, v);
   }
+  html += '</div>';
 
   // Preserve input state before replacing innerHTML
   const prevFilterEl = document.getElementById('model-filter');
@@ -378,6 +397,12 @@ function bindModelControls(container, a) {
   container.querySelectorAll('[data-model-range]').forEach(btn => {
     btn.addEventListener('click', () => {
       if (a.setRange) a.setRange(btn.dataset.modelRange);
+    });
+  });
+
+  container.querySelectorAll('[data-model-sort]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (a.setSortBy) a.setSortBy(btn.dataset.modelSort);
     });
   });
 

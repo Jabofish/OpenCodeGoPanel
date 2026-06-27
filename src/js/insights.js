@@ -152,6 +152,8 @@ export function deriveUsageInsights(snapshot, history, settings, now = new Date(
     }
   }
 
+  const deltas = deriveUsageDeltas(snapshot, history, now);
+
   return {
     projectedMonthlyCostUsd,
     projectedBudgetPct,
@@ -162,6 +164,7 @@ export function deriveUsageInsights(snapshot, history, settings, now = new Date(
     todayCostUsd,
     todayVsAveragePct,
     riskiestQuota,
+    deltas,
     messages: msgs,
   };
 }
@@ -184,4 +187,49 @@ export function pickPrimaryRisk(insights) {
 export function formatInsightShort(insight) {
   if (!insight) return '';
   return insight.title + (insight.metric ? ' · ' + insight.metric : '');
+}
+
+/**
+ * Find the history entry for a date `offsetDays` before `now`, falling back to
+ * the nearest prior entry when the exact date is missing.
+ */
+function findHistoryEntryByOffset(history, now, offsetDays) {
+  if (!Array.isArray(history) || history.length === 0) return null;
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offsetDays);
+  const target = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  let exact = null;
+  let nearestPrior = null;
+  for (const e of history) {
+    const ed = e.date || '';
+    if (ed === target) { exact = e; break; }
+    if (ed < target && (!nearestPrior || ed > (nearestPrior.date || ''))) nearestPrior = e;
+  }
+  return exact || nearestPrior;
+}
+
+/**
+ * Compute period-over-period deltas for the Usage-tab trend badges.
+ * Rolling vs yesterday, Weekly vs last week, Monthly vs last month.
+ * Each entry is { value, direction: 'up'|'down'|'flat' } or null when no prior data.
+ */
+export function deriveUsageDeltas(snapshot, history, now = new Date()) {
+  const rolling = snapshot.usage?.rolling || {};
+  const weekly = snapshot.usage?.weekly || {};
+  const monthly = snapshot.usage?.monthly || {};
+
+  function deltaFor(livePct, offsetDays, field) {
+    const prev = findHistoryEntryByOffset(history, now, offsetDays);
+    if (!prev) return null;
+    const value = (livePct || 0) - (prev[field] ?? 0);
+    return {
+      value,
+      direction: value > 0 ? 'up' : value < 0 ? 'down' : 'flat',
+    };
+  }
+
+  return {
+    rolling: deltaFor(rolling.usage_percent, 1, 'rolling_pct'),
+    weekly: deltaFor(weekly.usage_percent, 7, 'weekly_pct'),
+    monthly: deltaFor(monthly.usage_percent, 30, 'monthly_pct'),
+  };
 }

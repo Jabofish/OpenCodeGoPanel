@@ -10,6 +10,7 @@ pub mod paths;
 pub mod report_generator;
 pub mod scheduler;
 pub mod settings_store;
+pub mod tray_icon;
 pub mod updater;
 
 use auth::AuthStore;

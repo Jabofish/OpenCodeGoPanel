@@ -86,6 +86,7 @@ const modelActions = {
 
 let latestHistory = [];
 let latestInsights = null;
+let settingsAdvancedOpen = false;
 let historyDays = 30;
 let workspaceSelectRenderKey = '';
 
@@ -271,6 +272,10 @@ const settingActions = {
   },
   setReportFrequency: (value) => updateSettings({ reportFrequency: value }),
   setReportAutoGenerate: (value) => updateSettings({ reportAutoGenerate: value }),
+  toggleAdvanced: () => {
+    settingsAdvancedOpen = !settingsAdvancedOpen;
+    renderSettingsWithMaintenance(latestSnapshot);
+  },
 };
 
 function defaultSettings() {
@@ -347,6 +352,34 @@ function saveSettings() {
   }
 }
 
+// Map a DOM `KeyboardEvent.code` to the canonical key label the backend
+// parser accepts (e.g. "KeyA" -> "A", "ArrowUp" -> "Up", "F1" -> "F1").
+// Returns null for keys we don't expose as shortcuts.
+function codeToKeyLabel(code) {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^F([1-9]|1[0-2])$/.test(code)) return code;
+  switch (code) {
+    case 'Space': case 'Home': case 'End': case 'PageUp': case 'PageDown':
+    case 'Insert': case 'Delete': case 'Backspace': case 'Enter': case 'Tab':
+      return code;
+    case 'ArrowUp': return 'Up';
+    case 'ArrowDown': return 'Down';
+    case 'ArrowLeft': return 'Left';
+    case 'ArrowRight': return 'Right';
+    default: return null;
+  }
+}
+
+// Combos that commonly clash with built-in Windows OS shortcuts. We warn but
+// do not block, since the user may have remapped or disabled the OS binding.
+function isWindowsOsConflict(hotkey) {
+  return hotkey === 'Alt+Space'
+    || hotkey === 'Ctrl+Space'
+    || hotkey === 'Super+U'
+    || /^Super\+[A-Z]$/.test(hotkey);
+}
+
 function startHotkeyRecording() {
   const previous = settings.hotkey || 'Ctrl+Shift+U';
   settings.hotkeyRecording = true;
@@ -356,21 +389,49 @@ function startHotkeyRecording() {
   const onKeyDown = async (event) => {
     event.preventDefault();
     event.stopPropagation();
-    document.removeEventListener('keydown', onKeyDown, true);
 
-    const key = event.key?.toUpperCase();
-    if (!event.ctrlKey || !event.shiftKey || !key || key.length !== 1 || !/^[A-Z]$/.test(key)) {
-      showToast('Use Ctrl+Shift plus a letter A-Z', { type: 'warning' });
+    // Let the user press modifier keys freely while building a combo.
+    if (['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) {
+      return;
+    }
+    // Escape cancels recording and restores the previous hotkey.
+    if (event.key === 'Escape') {
+      document.removeEventListener('keydown', onKeyDown, true);
       delete settings.hotkeyRecording;
       updateSettings({ hotkey: previous });
       return;
     }
 
-    const hotkey = 'Ctrl+Shift+' + key;
+    document.removeEventListener('keydown', onKeyDown, true);
+
+    const modParts = [];
+    if (event.ctrlKey) modParts.push('Ctrl');
+    if (event.altKey) modParts.push('Alt');
+    if (event.shiftKey) modParts.push('Shift');
+    if (event.metaKey) modParts.push('Super');
+
+    const keyLabel = codeToKeyLabel(event.code);
+    if (!keyLabel) {
+      showToast('Unsupported key. Use a letter, digit, F1-F12, Space, or arrow/nav key.', { type: 'warning' });
+      delete settings.hotkeyRecording;
+      updateSettings({ hotkey: previous });
+      return;
+    }
+    if (modParts.length === 0) {
+      showToast('Include a modifier key (Ctrl/Alt/Shift/Super).', { type: 'warning' });
+      delete settings.hotkeyRecording;
+      updateSettings({ hotkey: previous });
+      return;
+    }
+
+    const hotkey = [...modParts, keyLabel].join('+');
     try {
       await invoke('set_hotkey', { hotkey });
       delete settings.hotkeyRecording;
       updateSettings({ hotkey });
+      if (isWindowsOsConflict(hotkey)) {
+        showToast('"' + hotkey + '" may conflict with a Windows OS shortcut and might not register reliably.', { type: 'warning' });
+      }
     } catch (e) {
       showToast('Failed to set hotkey: ' + e, { type: 'error' });
       delete settings.hotkeyRecording;
@@ -1062,7 +1123,7 @@ async function refreshMaintenanceStatus(options = {}) {
 
 function renderSettingsWithMaintenance(snapshot) {
   const { localDataStatus, localHealthCheck } = getMaintenanceStatus();
-  renderSettingsTab(snapshot, settings, settingActions, isPinned, localDataStatus, localHealthCheck);
+  renderSettingsTab(snapshot, settings, settingActions, isPinned, localDataStatus, localHealthCheck, settingsAdvancedOpen);
 }
 
 async function switchWorkspaceById(workspaceId) {
@@ -1171,6 +1232,10 @@ function switchTab(name) {
   currentTab = name;
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'tab-' + name));
+  // Each tab keeps its own scroll position — reset the shared scroll container
+  // so switching tabs never leaves you stranded at the previous tab's offset.
+  const panel = document.getElementById('panel-content');
+  if (panel) panel.scrollTop = 0;
   if (name === 'settings') {
     renderSettingsWithMaintenance(latestSnapshot);
     refreshMaintenanceStatus().catch(e => console.warn('[Maintenance] Refresh failed:', e));
@@ -1315,9 +1380,16 @@ async function init() {
       });
       listen('refresh-complete', async (event) => {
         console.log('[Event] refresh-complete:', event.payload);
+        // History feeds the Usage-tab delta badges and the Trends chart; fetch
+        // before re-render so deltas stay fresh on every refresh, not just
+        // when the Trends tab happens to be open.
+        try {
+          latestHistory = await fetchHistory(historyDays);
+        } catch (e) {
+          console.warn('[Event] fetchHistory failed:', e);
+        }
         await renderAll();
         if (currentTab === 'trends') {
-          latestHistory = await fetchHistory(historyDays);
           renderTrendsTab(latestHistory, latestSnapshot, settings, trendActions, historyDays);
         }
       });
@@ -1405,6 +1477,14 @@ async function init() {
       e.stopPropagation();
       renderQuickPeek(buildQuickPeekState(), quickPeekActions);
     });
+
+    // Pre-fetch history so the Usage-tab delta badges have data on the very
+    // first render (before the first backend refresh-complete fires).
+    try {
+      latestHistory = await fetchHistory(historyDays);
+    } catch (e) {
+      console.warn('[Init] Initial fetchHistory failed:', e);
+    }
 
     await renderAll();
     console.log('[Init] Initial render complete');

@@ -134,7 +134,7 @@ impl Default for AppSettings {
             auto_backup: true,
             auto_update: true,
             skipped_update_version: String::new(),
-            launch_on_startup: false,
+            launch_on_startup: true,
         }
     }
 }
@@ -220,6 +220,7 @@ mod tests {
         assert_eq!(s.hotkey, "Ctrl+Shift+U");
         assert_eq!(s.mini_badge_display, "percent");
         assert_eq!(s.notify_quota, true);
+        assert_eq!(s.launch_on_startup, true);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

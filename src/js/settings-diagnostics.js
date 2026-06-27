@@ -74,7 +74,11 @@ function buildDiagnosticStat(label, value) {
 function buildHealthRow(label, value, state) {
   const pillClass = state === 'ok' ? 'ok' : state === 'error' ? 'error' : state === 'warning' ? 'warning' : '';
   const pillText = state === 'ok' ? 'OK' : state === 'error' ? 'Issue' : state === 'warning' ? 'Check' : 'Idle';
+  // When the descriptive value duplicates the pill text (e.g. both "OK"),
+  // drop the middle column to avoid showing the same label twice on one row.
+  // Keep an empty span so the 4-column grid layout stays intact.
+  const metaValue = value === pillText ? '' : value;
   return '<div class="settings-health-row ' + pillClass + '"><span>' + escapeHtml(label) + '</span>' +
-    '<span class="settings-diagnostic-meta">' + escapeHtml(value) + '</span>' +
+    '<span class="settings-diagnostic-meta">' + escapeHtml(metaValue) + '</span>' +
     '<strong class="settings-status-pill ' + pillClass + '">' + escapeHtml(pillText) + '</strong></div>';
 }
