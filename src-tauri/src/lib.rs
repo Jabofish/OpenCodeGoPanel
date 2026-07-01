@@ -1,3 +1,4 @@
+pub mod account;
 pub mod auth;
 pub mod cache;
 pub mod client;
@@ -10,6 +11,7 @@ pub mod paths;
 pub mod report_generator;
 pub mod scheduler;
 pub mod settings_store;
+pub mod store_io;
 pub mod tray_icon;
 pub mod updater;
 
@@ -41,17 +43,31 @@ pub fn run() {
 
     let data_dir = get_data_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
 
-    let app_cache = Arc::new(AppCache::new(data_dir.clone()));
-    println!("[Backend] AppCache created");
-
-    let auth_store = Arc::new(AuthStore::new(data_dir.clone()));
-    println!("[Backend] AuthStore created");
-
-    let history_store = Arc::new(HistoryStore::new(data_dir.clone()));
-    println!("[Backend] HistoryStore created");
+    if let Err(e) = crate::account::migrate_to_accounts_layout(&data_dir) {
+        eprintln!("[Backend] Account migration failed: {}", e);
+    }
 
     let settings_store = Arc::new(SettingsStore::new(data_dir.clone()));
     println!("[Backend] SettingsStore created");
+
+    let active_account_id = settings_store.get().active_account_id.clone();
+    let accounts_root = data_dir.join(crate::account::ACCOUNTS_DIR);
+    let account_dir = if active_account_id.is_empty() {
+        accounts_root.join("__none__")
+    } else {
+        accounts_root.join(&active_account_id)
+    };
+
+    let auth_store = Arc::new(AuthStore::new(accounts_root, active_account_id.clone()));
+    println!("[Backend] AuthStore created");
+
+    let history_store = Arc::new(HistoryStore::new_in(
+        account_dir.join(crate::history::HISTORY_FILE),
+    ));
+    println!("[Backend] HistoryStore created");
+
+    let app_cache = Arc::new(AppCache::new_in(account_dir.join(crate::cache::CACHE_FILE)));
+    println!("[Backend] AppCache created");
     let initial_hotkey = settings_store.get().hotkey;
 
     let client = Arc::new(OpenCodeClient::new().expect("Failed to create HTTP client"));
@@ -75,6 +91,7 @@ pub fn run() {
         .manage(auth_store)
         .manage(history_store)
         .manage(settings_store.clone())
+        .manage(client.clone())
         .manage(scheduler.clone())
         .manage(Arc::new(HotkeyState {
             current: Mutex::new(initial_hotkey),
@@ -98,6 +115,11 @@ pub fn run() {
             commands::get_threshold,
             commands::list_workspaces,
             commands::switch_workspace,
+            commands::list_accounts,
+            commands::add_account,
+            commands::rename_account,
+            commands::remove_account,
+            commands::switch_account,
             commands::get_settings,
             commands::save_settings,
             commands::set_refresh_intervals,

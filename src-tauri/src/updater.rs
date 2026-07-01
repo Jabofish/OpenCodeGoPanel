@@ -64,27 +64,39 @@ async fn do_check_for_update(
 
     let updater = app.updater().map_err(|e| {
         let msg = format!("Failed to get updater: {}", e);
-        emit_status(&app, UpdateStatus::Error { message: msg.clone() });
+        emit_status(
+            &app,
+            UpdateStatus::Error {
+                message: msg.clone(),
+            },
+        );
         msg
     })?;
 
-    let check_result = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        updater.check(),
-    )
-    .await;
+    let check_result =
+        tokio::time::timeout(std::time::Duration::from_secs(15), updater.check()).await;
 
     match check_result {
         Err(_) => {
             let msg = "Update check timed out (15s)".to_string();
             eprintln!("[Updater] {}", msg);
-            emit_status(&app, UpdateStatus::Error { message: msg.clone() });
+            emit_status(
+                &app,
+                UpdateStatus::Error {
+                    message: msg.clone(),
+                },
+            );
             Err(msg)
         }
         Ok(Err(e)) => {
             let msg = format!("Update check failed: {}", e);
             eprintln!("[Updater] {}", msg);
-            emit_status(&app, UpdateStatus::Error { message: msg.clone() });
+            emit_status(
+                &app,
+                UpdateStatus::Error {
+                    message: msg.clone(),
+                },
+            );
             Err(msg)
         }
         Ok(Ok(Some(update))) => {
@@ -96,10 +108,7 @@ async fn do_check_for_update(
 
             // Skip if user chose to skip this version
             if !skipped.is_empty() && skipped == info.version {
-                println!(
-                    "[Updater] Skipping v{} (user opted out)",
-                    info.version
-                );
+                println!("[Updater] Skipping v{} (user opted out)", info.version);
                 emit_status(&app, UpdateStatus::UpToDate);
                 return Ok(None);
             }
@@ -143,7 +152,12 @@ pub async fn download_update(app: AppHandle) -> Result<(), String> {
 
     let updater = app.updater().map_err(|e| {
         let msg = format!("Failed to get updater: {}", e);
-        emit_status(&app, UpdateStatus::Error { message: msg.clone() });
+        emit_status(
+            &app,
+            UpdateStatus::Error {
+                message: msg.clone(),
+            },
+        );
         msg
     })?;
 
@@ -158,13 +172,7 @@ pub async fn download_update(app: AppHandle) -> Result<(), String> {
                         } else {
                             0.0
                         };
-                        emit_status(
-                            &app_clone,
-                            UpdateStatus::Downloading {
-                                progress,
-                                total,
-                            },
-                        );
+                        emit_status(&app_clone, UpdateStatus::Downloading { progress, total });
                     },
                     || {
                         println!("[Updater] Download complete");
@@ -175,7 +183,12 @@ pub async fn download_update(app: AppHandle) -> Result<(), String> {
                 .map_err(|e| {
                     let msg = format!("Download failed: {}", e);
                     eprintln!("[Updater] {}", msg);
-                    emit_status(&app, UpdateStatus::Error { message: msg.clone() });
+                    emit_status(
+                        &app,
+                        UpdateStatus::Error {
+                            message: msg.clone(),
+                        },
+                    );
                     msg
                 })?;
 
@@ -190,12 +203,22 @@ pub async fn download_update(app: AppHandle) -> Result<(), String> {
         }
         Ok(None) => {
             let msg = "No update available to download".to_string();
-            emit_status(&app, UpdateStatus::Error { message: msg.clone() });
+            emit_status(
+                &app,
+                UpdateStatus::Error {
+                    message: msg.clone(),
+                },
+            );
             Err(msg)
         }
         Err(e) => {
             let msg = format!("Update check failed during download: {}", e);
-            emit_status(&app, UpdateStatus::Error { message: msg.clone() });
+            emit_status(
+                &app,
+                UpdateStatus::Error {
+                    message: msg.clone(),
+                },
+            );
             Err(msg)
         }
     }

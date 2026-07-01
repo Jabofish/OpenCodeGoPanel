@@ -46,16 +46,37 @@ pub struct WorkspaceInfo {
 }
 
 pub struct AuthStore {
-    data_dir: PathBuf,
+    accounts_root: PathBuf,
+    active_account: std::sync::RwLock<String>,
 }
 
 impl AuthStore {
-    pub fn new(data_dir: PathBuf) -> Self {
-        Self { data_dir }
+    pub fn new(accounts_root: PathBuf, active_account_id: String) -> Self {
+        Self {
+            accounts_root,
+            active_account: std::sync::RwLock::new(active_account_id),
+        }
+    }
+
+    /// The directory for the active account: `<accounts_root>/<active_account>`.
+    fn active_dir(&self) -> PathBuf {
+        let active = self
+            .active_account
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        self.accounts_root.join(&active)
     }
 
     fn auth_path(&self) -> PathBuf {
-        self.data_dir.join(AUTH_FILE)
+        self.active_dir().join(AUTH_FILE)
+    }
+
+    /// Switch the active account (stateless — next read resolves to this dir).
+    pub fn set_active_account(&self, account_id: &str) {
+        if let Ok(mut w) = self.active_account.write() {
+            *w = account_id.to_string();
+        }
     }
 
     /// Load full multi-workspace auth. Auto-migrates from legacy format.
@@ -108,13 +129,17 @@ impl AuthStore {
 
     /// Save full auth to disk.
     fn save_auth(&self, auth: &StoredAuth) -> Result<(), String> {
-        std::fs::create_dir_all(&self.data_dir).map_err(|e| {
-            format!(
-                "Failed to create auth directory {}: {}",
-                self.data_dir.display(),
-                e
-            )
-        })?;
+        let active = self
+            .active_account
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        if active.is_empty() {
+            return Err("Cannot save auth: no active account".into());
+        }
+        let dir = self.accounts_root.join(&active);
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create auth directory {}: {}", dir.display(), e))?;
         let content = serde_json::to_string_pretty(auth)
             .map_err(|e| format!("Failed to serialize auth: {}", e))?;
         let content = Self::encode_auth_content(&content)?;
@@ -394,7 +419,7 @@ fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AuthStore, AUTH_ENCRYPTED_PREFIX};
+    use super::{AuthStore, CookieEntry, AUTH_ENCRYPTED_PREFIX};
 
     #[test]
     fn auth_content_round_trips_through_encrypted_wrapper() {
@@ -422,5 +447,78 @@ mod tests {
             AuthStore::workspace_display_name("工作区一二三四五六"),
             "工作区一二三四五…"
         );
+    }
+
+    use std::path::PathBuf;
+
+    fn auth_temp_dir() -> PathBuf {
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("ocp-auth-{}-{}", pid, nanos))
+    }
+
+    fn cookie() -> CookieEntry {
+        CookieEntry {
+            name: "s".into(),
+            value: "v".into(),
+            domain: ".opencode.ai".into(),
+            path: "/".into(),
+        }
+    }
+
+    #[test]
+    fn auth_path_resolves_through_active_account() {
+        let dir = auth_temp_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        // Two accounts, each with its own cookies.
+        let store = AuthStore::new(dir.clone(), "acc-a".into());
+        store.save_cookies(vec![cookie()], "ws-1".into()).unwrap();
+        assert!(store.has_valid_cookies());
+
+        store.set_active_account("acc-b");
+        // acc-b has no auth file → not logged in.
+        assert!(!store.has_valid_cookies());
+
+        // Save into acc-b.
+        store.save_cookies(vec![cookie()], "ws-9".into()).unwrap();
+        assert!(store.has_valid_cookies());
+
+        // Switch back to acc-a — its cookies are still there.
+        store.set_active_account("acc-a");
+        let loaded = store.load_cookies().unwrap();
+        assert_eq!(loaded.workspace_id, "ws-1");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auth_with_empty_active_account_reports_no_cookies() {
+        let dir = auth_temp_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = AuthStore::new(dir.clone(), String::new());
+        assert!(!store.has_valid_cookies());
+        // Saving with empty active account is an error (no account dir to write to).
+        assert!(store.save_cookies(vec![cookie()], "ws-1".into()).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auth_clear_cookies_removes_only_active_account_file() {
+        let dir = auth_temp_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = AuthStore::new(dir.clone(), "acc-a".into());
+        store.save_cookies(vec![cookie()], "ws-1".into()).unwrap();
+        store.set_active_account("acc-b");
+        store.save_cookies(vec![cookie()], "ws-2".into()).unwrap();
+
+        // Clear acc-b only.
+        store.clear_cookies().unwrap();
+        store.set_active_account("acc-a");
+        assert!(store.has_valid_cookies(), "acc-a must be untouched");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

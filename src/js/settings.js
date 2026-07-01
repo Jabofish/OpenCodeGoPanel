@@ -1,7 +1,7 @@
 import { escapeHtml } from './format.js';
 import { buildHealthCheckStatus, buildLocalDataStatus } from './settings-diagnostics.js';
 
-export function renderSettingsTab(snapshot, settings, actions, isPinned, localDataStatus, healthCheck, advancedOpen = false) {
+export function renderSettingsTab(snapshot, settings, actions, isPinned, localDataStatus, healthCheck, advancedOpen = false, accounts = [], inlineAction = null) {
   const container = document.getElementById('tab-settings');
   if (!container) return;
 
@@ -52,6 +52,7 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
           buildAction('setting-clear-exports', 'Clear exports', true, 'settings-diagnostic-action danger') +
           buildAction('setting-clear-history', 'Clear history', true, 'settings-diagnostic-action danger') +
         '</div>' +
+        (inlineAction?.kind === 'clear-local-data' ? buildInlineConfirm(inlineAction, 'Clear ' + inlineAction.scope + ' data?') : '') +
       '</div>' +
     '</div>';
 
@@ -113,10 +114,17 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
       buildAction('setting-test-notification', 'Test notification') +
     '</div>' +
     '<div class="settings-group">' +
+      '<div class="settings-title">Accounts</div>' +
+      buildAccountsListHtml(accounts, settings) +
+      buildAction('setting-add-account', 'Add account') +
+      (isAccountInlineAction(inlineAction) ? buildInlineAccountAction(inlineAction) : '') +
+    '</div>' +
+    '<div class="settings-group">' +
       '<div class="settings-title">Account</div>' +
       buildStatus('Workspace', escapeHtml(workspace)) +
       buildStatus('Workspace ID', escapeHtml(snapshot?.workspace_id || 'Not set')) +
       buildAction('setting-rename-workspace', 'Rename workspace') +
+      (inlineAction?.kind === 'rename-workspace' ? buildInlineInput(inlineAction, 'Workspace alias', 'Empty clears alias') : '') +
       buildAction('setting-favorite-workspace', profile.favorite ? '★ Unfavorite' : '☆ Favorite') +
       buildAction('setting-login', 'Log in') +
       buildAction('setting-clear-auth', 'Clear login') +
@@ -165,6 +173,14 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
   bindToggle('setting-auto-backup', (value) => actions.setAutoBackup(value));
   bindToggle('setting-auto-update', (value) => actions.setAutoUpdate(value));
   bindAction('setting-check-update', actions.checkForUpdate);
+  bindAction('setting-add-account', actions.addAccount);
+  for (const account of accounts || []) {
+    bindAction('setting-rename-account-' + account.id, () => actions.renameAccount(account.id, account.displayName));
+    if ((accounts || []).length > 1) {
+      bindAction('setting-remove-account-' + account.id, () => actions.removeAccount(account.id, account.displayName));
+    }
+  }
+  bindInlineAction(inlineAction, actions);
   bindInput('setting-budget', (value) => {
     const cents = Math.round(parseFloat(value || '0') * 100);
     actions.setBudget(cents >= 0 ? cents : 0);
@@ -199,9 +215,74 @@ function buildCollapsibleSection(id, title, open, bodyHtml) {
 function buildStatus(label, value) {
   return '<div class="setting-row"><span>' + escapeHtml(label) + '</span><strong>' + value + '</strong></div>';
 }
+function buildAccountsListHtml(accounts, settings) {
+  const list = accounts || [];
+  if (list.length === 0) {
+    return buildStatus('Accounts', 'None');
+  }
+  const activeId = settings.activeAccountId || '';
+  const rows = list.map(account => {
+    const isActive = account.id === activeId;
+    const name = (isActive ? '* ' : '') + (account.displayName || account.id);
+    return '<div class="settings-account-row" data-account-id="' + escapeHtml(account.id) + '">' +
+      '<span class="settings-account-name">' + escapeHtml(name) + '</span>' +
+      '<span class="settings-account-actions">' +
+        buildAction('setting-rename-account-' + account.id, 'Rename', true, 'settings-account-action') +
+        buildAction('setting-remove-account-' + account.id, 'Remove', list.length > 1, 'settings-account-action danger') +
+      '</span>' +
+    '</div>';
+  }).join('');
+  return '<div class="settings-account-list">' + rows + '</div>';
+}
+function isAccountInlineAction(action) {
+  return ['add-account', 'rename-account', 'remove-account'].includes(action?.kind);
+}
+function buildInlineAccountAction(action) {
+  if (action.kind === 'remove-account') {
+    return buildInlineConfirm(action, 'Remove "' + (action.displayName || action.accountId) + '" and its saved data?');
+  }
+  return buildInlineInput(action, 'Account name', action.kind === 'add-account' ? 'Optional' : '');
+}
+function buildInlineInput(action, label, placeholder) {
+  return '<div class="settings-inline-action" data-kind="' + escapeHtml(action?.kind || '') + '">' +
+    '<label class="settings-inline-label">' +
+      '<span>' + escapeHtml(label) + '</span>' +
+      '<input id="settings-inline-input" type="text" class="setting-input" value="' + escapeHtml(action?.value || '') + '"' +
+        (placeholder ? ' placeholder="' + escapeHtml(placeholder) + '"' : '') + '>' +
+    '</label>' +
+    '<div class="settings-inline-buttons">' +
+      '<button id="settings-inline-submit" type="button" class="settings-inline-btn primary">Save</button>' +
+      '<button id="settings-inline-cancel" type="button" class="settings-inline-btn">Cancel</button>' +
+    '</div>' +
+  '</div>';
+}
+function buildInlineConfirm(action, message) {
+  const confirmText = action.kind === 'remove-account' ? 'Remove' : 'Clear';
+  return '<div class="settings-inline-action danger" data-kind="' + escapeHtml(action?.kind || '') + '">' +
+    '<div class="settings-inline-message">' + escapeHtml(message) + '</div>' +
+    '<div class="settings-inline-buttons">' +
+      '<button id="settings-inline-submit" type="button" class="settings-inline-btn danger">' + escapeHtml(confirmText) + '</button>' +
+      '<button id="settings-inline-cancel" type="button" class="settings-inline-btn">Cancel</button>' +
+    '</div>' +
+  '</div>';
+}
+function bindInlineAction(action, actions) {
+  if (!action) return;
+  const submit = document.getElementById('settings-inline-submit');
+  const cancel = document.getElementById('settings-inline-cancel');
+  const input = document.getElementById('settings-inline-input');
+  submit?.addEventListener('click', () => actions.submitInlineAction(input ? input.value : ''));
+  cancel?.addEventListener('click', () => actions.cancelInlineAction());
+  input?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') actions.submitInlineAction(input.value);
+    if (event.key === 'Escape') actions.cancelInlineAction();
+  });
+  input?.focus();
+  input?.select();
+}
 function buildAction(id, label, enabled = true, className = 'setting-action') {
   return '<button id="' + id + '" type="button" class="' + escapeHtml(className) + '"' +
-    (enabled ? '' : ' disabled aria-disabled="true"') +
+    (enabled ? '' : ' disabled aria-disabled="true" disabled') +
     '><span>' + escapeHtml(label) + '</span><span class="setting-arrow">></span></button>';
 }
 function buildInput(id, label, value, type, placeholder) {

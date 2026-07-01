@@ -6,7 +6,8 @@ import { renderTrendsTab } from './trends.js';
 import { deriveUsageInsights, pickPrimaryRisk, formatInsightShort } from './insights.js';
 import { renderQuickPeek, openQuickPeek, closeQuickPeek, isQuickPeekOpen } from './quick-peek.js';
 import { getWorkspaceDisplayName, getWorkspaceProfile, sortWorkspaces } from './workspaces.js';
-import { showToast, showConfirm, dismissAllToasts, hideBadgeBubble, isBadgeBubbleActive } from './toast.js';
+import { refreshAccounts, renderAccountSelector, resetAccountSelectorRenderKey, setupAccountSelector } from './accounts.js';
+import { showToast, dismissAllToasts, hideBadgeBubble, isBadgeBubbleActive } from './toast.js';
 import { getMaintenanceStatus, refreshMaintenanceStatus as refreshMaintenanceStatusData } from './maintenance.js';
 import { initUpdater, checkForUpdateManually, consumePendingUpdate, isUpdateOverlayActive } from './updater.js';
 
@@ -41,12 +42,15 @@ let latestRefreshState = null;
 let lastSnapshotSignature = '';
 let settings = loadSettings();
 let miniBadgeExpanded = false;
+let miniBadgeRestorePosition = null;
 let lastManualRefreshAt = 0;
 let workspaceSwitchState = {
   switching: false,
   previousId: '',
   error: null,
 };
+let accountsCache = [];
+let settingsInlineAction = null;
 
 let modelView = {
   query: '',
@@ -174,6 +178,19 @@ const settingActions = {
     await renderAll();
   },
   login: async () => openLoginWindow(),
+  addAccount: () => showSettingsInlineAction({ kind: 'add-account', value: '' }),
+  renameAccount: (accountId, currentName) => showSettingsInlineAction({
+    kind: 'rename-account',
+    accountId,
+    value: currentName || '',
+  }),
+  removeAccount: (accountId, displayName) => showSettingsInlineAction({
+    kind: 'remove-account',
+    accountId,
+    displayName: displayName || accountId,
+  }),
+  submitInlineAction: async (value) => submitSettingsInlineAction(value),
+  cancelInlineAction: () => clearSettingsInlineAction(),
   clearAuth: async () => clearAuth(),
   clearCache: async () => clearCache(),
   hideToTray: async () => hideToTray(),
@@ -219,29 +236,7 @@ const settingActions = {
   clearCacheData: async () => settingActions.clearLocalData('cache'),
   clearAuthData: async () => settingActions.clearLocalData('auth'),
   clearSettingsData: async () => settingActions.clearLocalData('settings'),
-  clearLocalData: async (scope) => {
-    const confirmed = await showConfirm(
-      `Clear ${scope} data? This cannot be undone.`,
-      { title: 'Confirm Clear', confirmText: 'Clear', cancelText: 'Cancel' }
-    );
-    if (!confirmed) return;
-    try {
-      await invoke('clear_local_data', { scope });
-      if (scope === 'cache') {
-        // Trigger immediate refresh after cache clear
-        await triggerRefresh();
-        await renderAll();
-      } else {
-        await refreshMaintenanceStatus({ render: false });
-        await renderAll();
-      }
-      showToast('Cleared ' + scope + ' data', { type: 'success' });
-    }
-    catch (e) {
-      console.error('Failed to clear ' + scope + ':', e);
-      showToast('Failed to clear ' + scope + ': ' + e, { type: 'error' });
-    }
-  },
+  clearLocalData: async (scope) => showSettingsInlineAction({ kind: 'clear-local-data', scope }),
   renameWorkspace: () => renameCurrentWorkspace(),
   toggleFavoriteWorkspace: () => toggleFavoriteCurrentWorkspace(),
   setAutoBackup: (value) => updateSettings({ autoBackup: value }),
@@ -278,6 +273,72 @@ const settingActions = {
   },
 };
 
+function showSettingsInlineAction(action) {
+  settingsInlineAction = action;
+  renderSettingsWithMaintenance(latestSnapshot);
+}
+
+function clearSettingsInlineAction() {
+  settingsInlineAction = null;
+  renderSettingsWithMaintenance(latestSnapshot);
+}
+
+async function submitSettingsInlineAction(value) {
+  const action = settingsInlineAction;
+  if (!action) return;
+  try {
+    switch (action.kind) {
+      case 'add-account':
+        await invoke('add_account', { displayName: (value || '').trim() || null });
+        settings = await loadSettingsFromBackend();
+        accountsCache = await refreshAccounts();
+        resetAccountSelectorRenderKey();
+        loadAccounts();
+        settingsInlineAction = null;
+        renderSettingsWithMaintenance(latestSnapshot);
+        await invoke('open_login_window');
+        showToast('Account added. Log in to link it.', { type: 'success' });
+        break;
+      case 'rename-account':
+        await invoke('rename_account', { accountId: action.accountId, newName: (value || '').trim() });
+        accountsCache = await refreshAccounts();
+        resetAccountSelectorRenderKey();
+        loadAccounts();
+        settingsInlineAction = null;
+        renderSettingsWithMaintenance(latestSnapshot);
+        showToast('Account renamed', { type: 'success' });
+        break;
+      case 'remove-account':
+        await invoke('remove_account', { accountId: action.accountId });
+        settings = await loadSettingsFromBackend();
+        accountsCache = await refreshAccounts();
+        resetAccountSelectorRenderKey();
+        workspaceSelectRenderKey = '';
+        lastSnapshotSignature = '';
+        settingsInlineAction = null;
+        await renderAll();
+        showToast('Account removed', { type: 'success' });
+        break;
+      case 'rename-workspace':
+        applyWorkspaceAlias(value || '');
+        settingsInlineAction = null;
+        renderSettingsWithMaintenance(latestSnapshot);
+        break;
+      case 'clear-local-data':
+        settingsInlineAction = null;
+        await performClearLocalData(action.scope);
+        break;
+      default:
+        settingsInlineAction = null;
+        renderSettingsWithMaintenance(latestSnapshot);
+    }
+  } catch (e) {
+    console.error('[Settings] inline action failed:', e);
+    showToast('Failed: ' + e, { type: 'error' });
+    renderSettingsWithMaintenance(latestSnapshot);
+  }
+}
+
 function defaultSettings() {
   return {
     autoRefresh: true,
@@ -306,6 +367,8 @@ function defaultSettings() {
     theme: 'system',
     reportFrequency: 'off',
     reportAutoGenerate: false,
+    activeAccountId: '',
+    accounts: [],
   };
 }
 
@@ -489,7 +552,12 @@ async function resizeWindowForMiniBadge(expanded) {
       await setWindowSize(win, badgeSize);
       await setWindowMaxSize(win, badgeSize);
       await win.setResizable?.(false);
+      await restoreMiniBadgePosition(win);
       return;
+    }
+
+    if (!settings.miniBadgeMode) {
+      miniBadgeRestorePosition = null;
     }
 
     await setWindowMaxSize(win, null);
@@ -516,6 +584,58 @@ async function setWindowMaxSize(win, size) {
 
 function logicalSize(size) {
   return { Logical: { width: size.width, height: size.height } };
+}
+
+async function captureMiniBadgePosition() {
+  if (!getCurrentWindow) return;
+
+  try {
+    miniBadgeRestorePosition = await getWindowPosition(getCurrentWindow());
+  } catch (e) {
+    miniBadgeRestorePosition = null;
+    console.warn('[MiniBadge] Failed to capture badge position:', e);
+  }
+}
+
+async function restoreMiniBadgePosition(win) {
+  const position = miniBadgeRestorePosition;
+  miniBadgeRestorePosition = null;
+
+  if (!position || typeof win.setPosition !== 'function') return;
+
+  try {
+    await win.setPosition(physicalPosition(position));
+  } catch (e) {
+    console.warn('[MiniBadge] Failed to restore badge position:', e);
+  }
+}
+
+async function getWindowPosition(win) {
+  const position = typeof win.outerPosition === 'function'
+    ? await win.outerPosition()
+    : await win.innerPosition?.();
+
+  if (!position) return null;
+
+  const x = Number(position.x);
+  const y = Number(position.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+  return { x: Math.round(x), y: Math.round(y) };
+}
+
+function physicalPosition(position) {
+  const dpi = window.__TAURI__?.dpi;
+  if (dpi?.PhysicalPosition) {
+    return new dpi.PhysicalPosition(position.x, position.y);
+  }
+  return {
+    type: 'Physical',
+    data: {
+      x: position.x,
+      y: position.y,
+    },
+  };
 }
 
 async function invokeWindowCommand(win, command, value) {
@@ -629,6 +749,7 @@ function setupMiniBadge() {
     if (!settings.miniBadgeMode) return;
     hideBadgeBubble();
     clearCollapseTimer();
+    await captureMiniBadgePosition();
     setMiniBadgeExpanded(true);
     await resizeWindowForMiniBadge(true);
     await adjustWindowPositionAfterExpand();
@@ -895,12 +1016,25 @@ async function openLoginWindow() {
       showToast('Tauri API not available', { type: 'error' });
       return;
     }
+    await ensureAccountForLogin();
     await invoke('open_login_window');
     console.log('[Login] Login window opened');
   } catch (e) {
     console.error('[Login] Failed to open login window:', e);
     showToast('Failed to open login window: ' + e, { type: 'error' });
   }
+}
+
+async function ensureAccountForLogin() {
+  accountsCache = await refreshAccounts();
+  if (accountsCache.length > 0 && settings.activeAccountId) {
+    return;
+  }
+  await invoke('add_account', { displayName: null });
+  settings = await loadSettingsFromBackend();
+  accountsCache = await refreshAccounts();
+  resetAccountSelectorRenderKey();
+  loadAccounts();
 }
 
 async function triggerRefresh() {
@@ -984,6 +1118,7 @@ async function renderAll() {
     const snapshot = await fetchSnapshot();
     console.log('[Render] Snapshot received:', snapshot);
     applySnapshot(snapshot);
+    loadAccounts();
 
     // Check if need login
     if (snapshot.error && (snapshot.error.includes('Not logged in') || snapshot.error.includes('Not yet loaded'))) {
@@ -1095,14 +1230,37 @@ function renameCurrentWorkspace() {
   if (!wid) return;
   const profiles = { ...(settings.workspaceProfiles || {}) };
   const current = profiles[wid]?.alias || '';
-  const alias = prompt('Workspace alias (empty to clear):', current);
-  if (alias === null) return; // cancelled
+  showSettingsInlineAction({ kind: 'rename-workspace', value: current });
+}
+
+function applyWorkspaceAlias(alias) {
+  const wid = latestSnapshot?.workspace_id;
+  if (!wid) return;
+  const profiles = { ...(settings.workspaceProfiles || {}) };
   if (alias.trim()) {
     profiles[wid] = { ...(profiles[wid] || {}), alias: alias.trim() };
   } else {
     if (profiles[wid]) delete profiles[wid].alias;
   }
   updateSettings({ workspaceProfiles: profiles });
+}
+
+async function performClearLocalData(scope) {
+  try {
+    await invoke('clear_local_data', { scope });
+    if (scope === 'cache') {
+      await triggerRefresh();
+      await renderAll();
+    } else {
+      await refreshMaintenanceStatus({ render: false });
+      await renderAll();
+    }
+    showToast('Cleared ' + scope + ' data', { type: 'success' });
+  }
+  catch (e) {
+    console.error('Failed to clear ' + scope + ':', e);
+    showToast('Failed to clear ' + scope + ': ' + e, { type: 'error' });
+  }
 }
 
 function toggleFavoriteCurrentWorkspace() {
@@ -1123,7 +1281,38 @@ async function refreshMaintenanceStatus(options = {}) {
 
 function renderSettingsWithMaintenance(snapshot) {
   const { localDataStatus, localHealthCheck } = getMaintenanceStatus();
-  renderSettingsTab(snapshot, settings, settingActions, isPinned, localDataStatus, localHealthCheck, settingsAdvancedOpen);
+  renderSettingsTab(
+    snapshot,
+    settings,
+    settingActions,
+    isPinned,
+    localDataStatus,
+    localHealthCheck,
+    settingsAdvancedOpen,
+    accountsCache,
+    settingsInlineAction
+  );
+}
+
+async function onAccountSwitched(result = {}) {
+  settings = await loadSettingsFromBackend();
+  accountsCache = await refreshAccounts();
+  resetAccountSelectorRenderKey();
+  workspaceSelectRenderKey = '';
+  lastSnapshotSignature = '';
+  loadAccounts();
+  if (settings.usageThreshold >= 0) {
+    try { await invoke('set_threshold', { threshold: settings.usageThreshold || 0 }); } catch (_) {}
+  }
+  if (result.failed) {
+    showToast('Failed to switch account', { type: 'error' });
+  }
+  await renderAll();
+  setTimeout(() => renderAll().catch(e => console.warn('[Accounts] Follow-up render failed:', e)), 700);
+}
+
+function loadAccounts() {
+  renderAccountSelector(accountsCache, settings.activeAccountId || '');
 }
 
 async function switchWorkspaceById(workspaceId) {
@@ -1367,6 +1556,7 @@ async function init() {
   try {
     // Load settings from backend, falling back to localStorage
     settings = await loadSettingsFromBackend();
+    accountsCache = await refreshAccounts();
 
     // Initialize auto-update event listener
     initUpdater();
@@ -1375,6 +1565,9 @@ async function init() {
     if (listen) {
       listen('auth-state-changed', async (event) => {
         console.log('[Event] auth-state-changed:', event.payload);
+        settings = await loadSettingsFromBackend();
+        accountsCache = await refreshAccounts();
+        resetAccountSelectorRenderKey();
         await refreshMaintenanceStatus({ render: false });
         await renderAll();
       });
@@ -1400,10 +1593,12 @@ async function init() {
 
     setupWindowControls();
     setupWorkspaceSelector();
+    setupAccountSelector(onAccountSwitched);
     setupMiniBadge();
     console.log('[Init] Window controls setup complete');
     document.getElementById('btn-pin')?.classList.toggle('active', isPinned);
     applyUiSettings();
+    loadAccounts();
 
     // Sync threshold to backend on startup
     if (settings.usageThreshold > 0) {

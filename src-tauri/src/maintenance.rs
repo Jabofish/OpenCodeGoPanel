@@ -191,11 +191,7 @@ fn rotate_backups(backup_dir: &Path) -> Result<(), String> {
     let mut backups: Vec<_> = std::fs::read_dir(backup_dir)
         .map_err(|e| e.to_string())?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.file_name()
-                .to_string_lossy()
-                .starts_with("auto-backup-")
-        })
+        .filter(|e| e.file_name().to_string_lossy().starts_with("auto-backup-"))
         .collect();
 
     if backups.len() <= MAX_AUTO_BACKUPS {
@@ -208,7 +204,11 @@ fn rotate_backups(backup_dir: &Path) -> Result<(), String> {
     // Remove oldest backups beyond the limit
     for old in backups.iter().skip(MAX_AUTO_BACKUPS) {
         if let Err(e) = std::fs::remove_file(old.path()) {
-            eprintln!("[Backup] Failed to remove old backup {:?}: {}", old.path(), e);
+            eprintln!(
+                "[Backup] Failed to remove old backup {:?}: {}",
+                old.path(),
+                e
+            );
         }
     }
 
@@ -615,7 +615,8 @@ mod tests {
         let backups = dir.join(BACKUPS_DIR);
         std::fs::create_dir_all(&backups).expect("create backups directory");
         std::fs::write(backups.join("auto-backup-20260618.json"), b"12345").expect("write backup");
-        std::fs::write(backups.join("auto-backup-20260619.json"), b"1234567890").expect("write backup");
+        std::fs::write(backups.join("auto-backup-20260619.json"), b"1234567890")
+            .expect("write backup");
 
         let status = local_data_status_in(&dir);
 

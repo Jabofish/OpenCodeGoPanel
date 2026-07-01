@@ -4,19 +4,33 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-const HISTORY_FILE: &str = "opencode-history.json";
+pub const HISTORY_FILE: &str = "opencode-history.json";
 const DEFAULT_KEEP_DAYS: u32 = 90;
 const DATE_FORMAT: &str = "%Y-%m-%d";
 
 pub struct HistoryStore {
     data: RwLock<Vec<HistoryEntry>>,
-    history_path: PathBuf,
+    history_path: RwLock<PathBuf>,
 }
 
 impl HistoryStore {
+    /// Existing constructor: takes the data dir + uses HISTORY_FILE.
+    /// (Lib.rs calls this; migration will place the file under accounts/<id>/.)
     pub fn new(data_dir: PathBuf) -> Self {
-        let history_path = data_dir.join(HISTORY_FILE);
-        let data = std::fs::read_to_string(&history_path)
+        Self::new_in(data_dir.join(HISTORY_FILE))
+    }
+
+    /// Construct with an explicit file path (used in tests + post-migration init).
+    pub fn new_in(history_path: PathBuf) -> Self {
+        let data = Self::load_file(&history_path);
+        Self {
+            data: RwLock::new(data),
+            history_path: RwLock::new(history_path),
+        }
+    }
+
+    fn load_file(history_path: &PathBuf) -> Vec<HistoryEntry> {
+        std::fs::read_to_string(history_path)
             .ok()
             .and_then(|content| {
                 // Try to parse as new format first
@@ -60,19 +74,29 @@ impl HistoryStore {
 
                 None
             })
-            .unwrap_or_default();
+            .unwrap_or_default()
+    }
 
-        Self {
-            data: RwLock::new(data),
-            history_path,
-        }
+    /// Switch the active account's history file: flush current, load target, swap path.
+    pub fn set_active_account(&self, new_path: PathBuf) -> Result<(), String> {
+        let mut data_guard = self
+            .data
+            .write()
+            .map_err(|_| "history data lock poisoned".to_string())?;
+        let mut path_guard = self
+            .history_path
+            .write()
+            .map_err(|_| "history path lock poisoned".to_string())?;
+        crate::store_io::swap_store_file(&mut *data_guard, &mut path_guard, new_path)
     }
 
     /// Record today's snapshot into history. Updates existing entry for today or appends new.
     pub fn record(&self, snapshot: &AppDataSnapshot) {
         let today = chrono::Local::now().format("%Y-%m-%d").to_string();
         let workspace_id = snapshot.workspace_id.clone();
-        let total_cost: i64 = snapshot.daily_costs.iter()
+        let total_cost: i64 = snapshot
+            .daily_costs
+            .iter()
             .filter(|c| c.date == today)
             .map(|c| c.total_cost)
             .sum();
@@ -276,7 +300,14 @@ impl HistoryStore {
     }
 
     fn persist_locked(&self, entries: &[HistoryEntry]) {
-        if let Some(parent) = self.history_path.parent() {
+        let path = match self.history_path.read() {
+            Ok(p) => p.clone(),
+            Err(_) => {
+                eprintln!("[History] path lock poisoned");
+                return;
+            }
+        };
+        if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 eprintln!("[History] Failed to create history dir: {}", e);
                 return;
@@ -285,7 +316,7 @@ impl HistoryStore {
 
         match serde_json::to_string(entries) {
             Ok(content) => {
-                if let Err(e) = std::fs::write(&self.history_path, content) {
+                if let Err(e) = std::fs::write(&path, content) {
                     eprintln!("[History] Failed to write history: {}", e);
                 }
             }
@@ -723,5 +754,66 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].workspace_id, "a");
         assert_eq!(entries[1].workspace_id, "b");
+    }
+
+    mod account_tests {
+        use super::*;
+        use crate::models::AppDataSnapshot;
+
+        fn hist_temp_dir() -> PathBuf {
+            let pid = std::process::id();
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            std::env::temp_dir().join(format!("ocp-hist-account-{}-{}", pid, nanos))
+        }
+
+        fn empty_snapshot(ws: &str) -> AppDataSnapshot {
+            let mut snapshot = AppDataSnapshot::empty();
+            snapshot.workspace_id = ws.into();
+            snapshot
+        }
+
+        #[test]
+        fn switch_account_flushes_and_reloads_history() {
+            let dir = hist_temp_dir();
+            let _ = std::fs::remove_dir_all(&dir);
+            let a_path = dir.join("accounts").join("acc-a").join(HISTORY_FILE);
+            let b_path = dir.join("accounts").join("acc-b").join(HISTORY_FILE);
+            let store = HistoryStore::new_in(a_path.clone());
+
+            store.record(&empty_snapshot("ws-1"));
+            assert_eq!(store.get_entries(90).len(), 1);
+
+            store.set_active_account(b_path).unwrap();
+            assert_eq!(store.get_entries(90).len(), 0, "acc-b should be empty");
+
+            store.record(&empty_snapshot("ws-9"));
+            assert_eq!(store.get_entries(90).len(), 1);
+
+            store.set_active_account(a_path).unwrap();
+            let entries = store.get_entries(90);
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].workspace_id, "ws-1");
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn switch_account_persists_old_before_swap() {
+            let dir = hist_temp_dir();
+            let _ = std::fs::remove_dir_all(&dir);
+            let a_path = dir.join("accounts").join("acc-a").join(HISTORY_FILE);
+            let b_path = dir.join("accounts").join("acc-b").join(HISTORY_FILE);
+            let store = HistoryStore::new_in(a_path.clone());
+
+            store.record(&empty_snapshot("ws-1"));
+            store.set_active_account(b_path).unwrap();
+
+            let raw = std::fs::read_to_string(&a_path).unwrap();
+            assert!(raw.contains("ws-1"));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

@@ -595,7 +595,7 @@ impl OpenCodeClient {
                 }
                 if depth == 0 {
                     let len = i - start;
-                    if len > best_len {
+                    if len > best_len && Self::looks_like_usage_records_array(&text[start..i]) {
                         best_len = len;
                         best_start = Some(start);
                         best_end = Some(i);
@@ -611,6 +611,14 @@ impl OpenCodeClient {
             _ => return Ok(Vec::new()),
         };
         Self::parse_record_array(&text[s..e])
+    }
+
+    fn looks_like_usage_records_array(array_content: &str) -> bool {
+        array_content.contains("id")
+            && array_content.contains("workspaceID")
+            && array_content.contains("model")
+            && array_content.contains("provider")
+            && array_content.contains("cost")
     }
 
     fn parse_record_array(array_content: &str) -> Result<Vec<UsageRecord>, String> {
@@ -745,5 +753,11 @@ mod tests {
         assert_eq!(usage.weekly.status, "exhausted");
         assert_eq!(usage.weekly.usage_percent, 100);
         assert_eq!(usage.weekly.reset_in_sec, 0);
+    }
+
+    #[test]
+    fn usage_list_ignores_server_function_marker_array() {
+        let records = OpenCodeClient::parse_usage_list_response(r#"["server-fn:1"]"#).unwrap();
+        assert!(records.is_empty());
     }
 }

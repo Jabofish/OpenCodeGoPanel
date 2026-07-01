@@ -3,8 +3,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-const SETTINGS_FILE: &str = "opencode-settings.json";
-const SETTINGS_VERSION: u32 = 3;
+use crate::account::{AccountInfo, AccountSettings};
+
+pub const SETTINGS_FILE: &str = "opencode-settings.json";
+const SETTINGS_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -44,6 +46,9 @@ pub struct AppSettings {
     pub skipped_update_version: String,
     // Startup
     pub launch_on_startup: bool,
+    // --- Account index (global) ---
+    pub active_account_id: String,
+    pub accounts: Vec<AccountInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -135,6 +140,8 @@ impl Default for AppSettings {
             auto_update: true,
             skipped_update_version: String::new(),
             launch_on_startup: true,
+            active_account_id: String::new(),
+            accounts: Vec::new(),
         }
     }
 }
@@ -142,39 +149,164 @@ impl Default for AppSettings {
 pub struct SettingsStore {
     data: RwLock<AppSettings>,
     settings_path: PathBuf,
+    accounts_root: PathBuf,
+    active_account: RwLock<String>,
 }
 
 impl SettingsStore {
     pub fn new(data_dir: PathBuf) -> Self {
         let settings_path = data_dir.join(SETTINGS_FILE);
+        let accounts_root = data_dir.join(crate::account::ACCOUNTS_DIR);
         let settings = std::fs::read_to_string(&settings_path)
             .ok()
             .and_then(|content| serde_json::from_str::<AppSettings>(&content).ok())
             .unwrap_or_default()
             .normalize();
-
+        let active = settings.active_account_id.clone();
         let store = Self {
             data: RwLock::new(settings),
             settings_path,
+            accounts_root,
+            active_account: RwLock::new(active),
         };
-        store.persist();
+        store.persist_global();
         store
     }
 
+    /// Merged view: global settings + active account's AccountSettings.
     pub fn get(&self) -> AppSettings {
-        self.data.read().map(|r| r.clone()).unwrap_or_default()
+        let mut merged = self.data.read().map(|r| r.clone()).unwrap_or_default();
+        let active_id = self
+            .active_account
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        merged.active_account_id = active_id.clone();
+        if !active_id.is_empty() {
+            let acct = self.load_account_settings(&active_id);
+            merged.monthly_budget = acct.monthly_budget;
+            merged.usage_threshold = acct.usage_threshold;
+            merged.mini_badge_source = acct.mini_badge_source;
+            merged.workspace_profiles = acct.workspace_profiles;
+            merged.recent_workspaces = acct.recent_workspaces;
+        }
+        merged
     }
 
+    /// Split a merged blob: global → settings file, per-account → account file.
     pub fn save(&self, next: AppSettings) -> Result<AppSettings, String> {
-        let normalized = next.normalize();
+        let mut normalized = next.normalize();
+        let acct = AccountSettings {
+            monthly_budget: normalized.monthly_budget,
+            usage_threshold: normalized.usage_threshold,
+            mini_badge_source: normalized.mini_badge_source.clone(),
+            workspace_profiles: normalized.workspace_profiles.clone(),
+            recent_workspaces: normalized.recent_workspaces.clone(),
+        };
+        let requested_active_id = normalized.active_account_id.clone();
+        let active_id = if requested_active_id.is_empty() {
+            self.active_account
+                .read()
+                .map(|g| g.clone())
+                .unwrap_or_default()
+        } else {
+            requested_active_id
+        };
+        normalized.active_account_id = active_id.clone();
+        if !active_id.is_empty() {
+            self.save_account_settings(&active_id, &acct)?;
+        }
         if let Ok(mut writer) = self.data.write() {
             *writer = normalized.clone();
         }
-        self.persist();
+        if let Ok(mut active) = self.active_account.write() {
+            *active = active_id;
+        }
+        self.persist_global();
         Ok(normalized)
     }
 
-    fn persist(&self) {
+    /// Switch active account (updates the pointer + bumps last_used_at).
+    pub fn set_active_account(&self, account_id: &str) -> Result<(), String> {
+        let (accounts, _) = {
+            let reader = self
+                .data
+                .read()
+                .map_err(|_| "settings lock poisoned".to_string())?;
+            let mut m = crate::account::AccountsManager::new(
+                reader.accounts.clone(),
+                reader.active_account_id.clone(),
+            );
+            m.set_active(account_id)?;
+            m.into_parts()
+        };
+        if let Ok(mut writer) = self.data.write() {
+            writer.accounts = accounts;
+            writer.active_account_id = account_id.to_string();
+        }
+        if let Ok(mut w) = self.active_account.write() {
+            *w = account_id.to_string();
+        }
+        self.persist_global();
+        Ok(())
+    }
+
+    pub fn accounts_root(&self) -> &PathBuf {
+        &self.accounts_root
+    }
+
+    /// Persist only the global account index and active pointer.
+    pub fn save_account_index(
+        &self,
+        accounts: Vec<AccountInfo>,
+        active_account_id: String,
+    ) -> Result<(), String> {
+        if !active_account_id.is_empty() && accounts.iter().all(|a| a.id != active_account_id) {
+            return Err(format!("Account {} not found", active_account_id));
+        }
+        if let Ok(mut writer) = self.data.write() {
+            writer.accounts = accounts;
+            writer.active_account_id = active_account_id.clone();
+        }
+        if let Ok(mut active) = self.active_account.write() {
+            *active = active_account_id;
+        }
+        self.persist_global();
+        Ok(())
+    }
+
+    fn account_path(&self, account_id: &str) -> PathBuf {
+        self.accounts_root
+            .join(account_id)
+            .join(crate::account::ACCOUNT_FILE)
+    }
+
+    fn load_account_settings(&self, account_id: &str) -> AccountSettings {
+        let path = self.account_path(account_id);
+        match std::fs::read_to_string(&path) {
+            Ok(content) => {
+                serde_json::from_str(&content).unwrap_or_else(|_| AccountSettings::defaults())
+            }
+            Err(_) => AccountSettings::defaults(),
+        }
+    }
+
+    fn save_account_settings(
+        &self,
+        account_id: &str,
+        acct: &AccountSettings,
+    ) -> Result<(), String> {
+        let path = self.account_path(account_id);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("create_dir_all {}: {}", parent.display(), e))?;
+        }
+        let content =
+            serde_json::to_string_pretty(acct).map_err(|e| format!("serialize account: {}", e))?;
+        std::fs::write(&path, content).map_err(|e| format!("write {}: {}", path.display(), e))
+    }
+
+    fn persist_global(&self) {
         if let Some(parent) = self.settings_path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 eprintln!("[SettingsStore] Failed to create dir: {}", e);
@@ -197,6 +329,7 @@ impl SettingsStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::account::{AccountSettings, ACCOUNTS_DIR, ACCOUNT_FILE};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_TEMP_ID: AtomicU64 = AtomicU64::new(0);
@@ -329,6 +462,190 @@ mod tests {
         s.report_frequency = "hourly".into();
         let saved = store.save(s).unwrap();
         assert_eq!(saved.report_frequency, "off");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn get_settings_merges_active_account_fields() {
+        let dir = temp_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = SettingsStore::new(dir.clone());
+
+        let mut manager = crate::account::AccountsManager::new(Vec::new(), String::new());
+        let added = manager.add(Some("Personal".into())).clone();
+        let (accounts, active) = manager.into_parts();
+        let mut settings = store.get();
+        settings.accounts = accounts;
+        settings.active_account_id = active.clone();
+        store.save(settings).unwrap();
+
+        let account_settings = AccountSettings {
+            monthly_budget: 7777,
+            usage_threshold: 90,
+            ..AccountSettings::defaults()
+        };
+        let account_dir = dir.join(ACCOUNTS_DIR).join(&active);
+        std::fs::create_dir_all(&account_dir).unwrap();
+        std::fs::write(
+            account_dir.join(ACCOUNT_FILE),
+            serde_json::to_string_pretty(&account_settings).unwrap(),
+        )
+        .unwrap();
+
+        let merged = store.get();
+        assert_eq!(merged.active_account_id, added.id);
+        assert_eq!(merged.monthly_budget, 7777);
+        assert_eq!(merged.usage_threshold, 90);
+        assert_eq!(merged.accounts.len(), 1);
+        assert_eq!(merged.accounts[0].display_name, "Personal");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_settings_splits_to_correct_files() {
+        let dir = temp_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = SettingsStore::new(dir.clone());
+
+        let mut manager = crate::account::AccountsManager::new(Vec::new(), String::new());
+        manager.add(Some("Personal".into()));
+        let (accounts, active) = manager.into_parts();
+        let mut settings = store.get();
+        settings.accounts = accounts;
+        settings.active_account_id = active.clone();
+        store.save(settings).unwrap();
+
+        let mut blob = store.get();
+        blob.monthly_budget = 12345;
+        blob.usage_threshold = 70;
+        blob.theme = "dark".into();
+        store.save(blob).unwrap();
+
+        let global_str = std::fs::read_to_string(dir.join(SETTINGS_FILE)).unwrap();
+        let global: AppSettings = serde_json::from_str(&global_str).unwrap();
+        assert_eq!(global.theme, "dark");
+
+        let account_str =
+            std::fs::read_to_string(dir.join(ACCOUNTS_DIR).join(&active).join(ACCOUNT_FILE))
+                .unwrap();
+        let account: AccountSettings = serde_json::from_str(&account_str).unwrap();
+        assert_eq!(account.monthly_budget, 12345);
+        assert_eq!(account.usage_threshold, 70);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_settings_with_empty_active_account_persists_global() {
+        let dir = temp_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = SettingsStore::new(dir.clone());
+        let mut blob = store.get();
+        blob.theme = "light".into();
+        blob.monthly_budget = 5000;
+        store.save(blob).unwrap();
+
+        let global_str = std::fs::read_to_string(dir.join(SETTINGS_FILE)).unwrap();
+        let global: AppSettings = serde_json::from_str(&global_str).unwrap();
+        assert_eq!(global.theme, "light");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn switching_account_changes_returned_account_settings() {
+        let dir = temp_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = SettingsStore::new(dir.clone());
+
+        let mut manager = crate::account::AccountsManager::new(Vec::new(), String::new());
+        let a = manager.add(Some("A".into())).clone();
+        let b = manager.add(Some("B".into())).clone();
+        let (accounts, _) = manager.into_parts();
+        let mut settings = store.get();
+        settings.accounts = accounts;
+        settings.active_account_id = a.id.clone();
+        store.save(settings).unwrap();
+
+        for (account_id, budget) in [(&a.id, 1111u32), (&b.id, 2222u32)] {
+            let account_dir = dir.join(ACCOUNTS_DIR).join(account_id);
+            std::fs::create_dir_all(&account_dir).unwrap();
+            let account = AccountSettings {
+                monthly_budget: budget,
+                ..AccountSettings::defaults()
+            };
+            std::fs::write(
+                account_dir.join(ACCOUNT_FILE),
+                serde_json::to_string_pretty(&account).unwrap(),
+            )
+            .unwrap();
+        }
+
+        store.set_active_account(&a.id).unwrap();
+        assert_eq!(store.get().monthly_budget, 1111);
+        store.set_active_account(&b.id).unwrap();
+        assert_eq!(store.get().monthly_budget, 2222);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn missing_account_file_defaults_to_account_settings_defaults() {
+        let dir = temp_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = SettingsStore::new(dir.clone());
+        let mut manager = crate::account::AccountsManager::new(Vec::new(), String::new());
+        manager.add(None);
+        let (accounts, active) = manager.into_parts();
+        let mut settings = store.get();
+        settings.accounts = accounts;
+        settings.active_account_id = active;
+        store.save(settings).unwrap();
+
+        let merged = store.get();
+        assert_eq!(merged.monthly_budget, 6000);
+        assert_eq!(merged.usage_threshold, 80);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_account_index_does_not_overwrite_target_account_settings() {
+        let dir = temp_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = SettingsStore::new(dir.clone());
+
+        let mut manager = crate::account::AccountsManager::new(Vec::new(), String::new());
+        let a = manager.add(Some("A".into())).clone();
+        let b = manager.add(Some("B".into())).clone();
+        let (accounts, _) = manager.into_parts();
+        store
+            .save_account_index(accounts.clone(), a.id.clone())
+            .unwrap();
+
+        for (account_id, budget) in [(&a.id, 1111u32), (&b.id, 2222u32)] {
+            let account_dir = dir.join(ACCOUNTS_DIR).join(account_id);
+            std::fs::create_dir_all(&account_dir).unwrap();
+            let account = AccountSettings {
+                monthly_budget: budget,
+                ..AccountSettings::defaults()
+            };
+            std::fs::write(
+                account_dir.join(ACCOUNT_FILE),
+                serde_json::to_string_pretty(&account).unwrap(),
+            )
+            .unwrap();
+        }
+
+        store
+            .save_account_index(accounts, b.id.clone())
+            .expect("switch index only");
+        assert_eq!(store.get().monthly_budget, 2222);
+
+        let account_str =
+            std::fs::read_to_string(dir.join(ACCOUNTS_DIR).join(&b.id).join(ACCOUNT_FILE)).unwrap();
+        let account: AccountSettings = serde_json::from_str(&account_str).unwrap();
+        assert_eq!(account.monthly_budget, 2222);
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

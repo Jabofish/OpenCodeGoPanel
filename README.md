@@ -25,6 +25,18 @@ npm run tauri build    # build a Windows installer
 npm run test:rust      # run the Rust unit tests
 ```
 
+## Release 0.1.8
+
+- **Multi-account support:** Add, rename, remove, and switch between independent accounts — each with its own auth cookies, usage history, cache, workspace profiles, budget, and threshold. Switch from the titlebar dropdown or the Settings Accounts panel.
+- **Per-account settings split:** Budget, usage threshold, mini-badge source, workspace profiles, and recent workspaces are now stored per-account (`accounts/<id>/opencode-account.json`), while global preferences (theme, hotkey, auto-update, etc.) remain in the top-level settings file.
+- **Settings inline actions:** Add/rename/remove account, rename workspace, and clear-local-data confirmations now use compact inline forms and confirmation prompts instead of browser-native `prompt()`/`confirm()` dialogs.
+- **Auto-migration for legacy data:** On first launch, single-account data (`opencode-auth.json`, `opencode-history.json`, `opencode-cache.json`, and per-account settings fields) is migrated into the new `accounts/<id>/` layout with a generated account ID.
+- **Login flow improvements:** A default account is auto-created before opening the login window when no account exists. Stale OpenCode webview cookies are cleared before creating a fresh login session. On successful login, workspace cache is immediately seeded with fetched usage data.
+- **Mini badge position preservation:** When collapsing the mini badge back from expanded mode, the window now restores its exact previous badge position instead of jumping to a default location.
+- **Usage parsing fix:** The usage-records parser now validates that candidate JSON arrays contain expected field keys (`id`, `workspaceID`, `model`, `provider`, `cost`) before attempting to parse them, preventing false positives from server-function markers.
+- **Confirm dialog redesign:** Confirmation prompts now render as compact inline toast notifications (with left-border accent) instead of full-screen modal overlays with backdrop, keeping the panel feel lighter.
+- **Code quality pass:** `put_pixel` now takes `[u8;4]` instead of four separate arguments; `parse_key_token` uses `is_ascii_uppercase()` and `is_ascii_digit()` instead of range checks; `store_io.rs` provides a shared atomic file-swap primitive for `AppCache`, `HistoryStore`, and future stores; consistent formatting across the Rust codebase.
+
 ## Release 0.1.7
 
 - **Reasoning token visualization:** The Models tab now aggregates `reasoning_tokens` from deep-thinking models and surfaces them as a purple "THINK" chip inside each model's output tokens, plus a Reasoning row in the Token Summary. A new "Reasoning" sort option ranks models by thinking-token volume.

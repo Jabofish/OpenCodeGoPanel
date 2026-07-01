@@ -255,29 +255,23 @@ export function showConfirm(message, options = {}) {
   } = options;
 
   return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.className = 'confirm-overlay';
-
+    const container = ensureContainer();
     const dialog = document.createElement('div');
-    dialog.className = 'confirm-dialog';
-
-    dialog.innerHTML = `
-      <div class="confirm-title">${escapeHtml(title)}</div>
-      <div class="confirm-message">${escapeHtml(message)}</div>
-      <div class="confirm-buttons">
-        <button class="confirm-btn confirm-cancel">${escapeHtml(cancelText)}</button>
-        <button class="confirm-btn confirm-ok">${escapeHtml(confirmText)}</button>
-      </div>
-    `;
-
-    overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
+    dialog.className = 'toast confirm-toast';
+    dialog.innerHTML =
+      '<div class="confirm-title">' + escapeHtml(title) + '</div>' +
+      '<div class="confirm-message">' + escapeHtml(message) + '</div>' +
+      '<div class="confirm-buttons">' +
+        '<button class="confirm-btn confirm-cancel">' + escapeHtml(cancelText) + '</button>' +
+        '<button class="confirm-btn confirm-ok">' + escapeHtml(confirmText) + '</button>' +
+      '</div>';
+    container.appendChild(dialog);
 
     const cleanup = () => {
-      overlay.classList.add('confirm-hide');
+      dialog.classList.add('toast-hide');
       setTimeout(() => {
-        if (overlay.parentNode) {
-          overlay.parentNode.removeChild(overlay);
+        if (dialog.parentNode) {
+          dialog.parentNode.removeChild(dialog);
         }
       }, 200);
     };
@@ -294,19 +288,6 @@ export function showConfirm(message, options = {}) {
       cleanup();
       resolve(false);
     });
-
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) {
-        cleanup();
-        resolve(false);
-      }
-    });
-
-    // Show animation
-    setTimeout(() => overlay.classList.add('confirm-show'), 10);
-
-    // Focus OK button
-    setTimeout(() => okBtn.focus(), 100);
   });
 }
 

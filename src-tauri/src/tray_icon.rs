@@ -65,13 +65,13 @@ fn threshold_color(pct: u32) -> (u8, u8, u8) {
 }
 
 /// Write one RGBA pixel into the buffer (no-op if out of bounds).
-fn put_pixel(buf: &mut [u8], size: i32, x: i32, y: i32, r: u8, g: u8, b: u8, a: u8) {
+fn put_pixel(buf: &mut [u8], size: i32, x: i32, y: i32, rgba: [u8; 4]) {
     if (0..size).contains(&x) && (0..size).contains(&y) {
         let i = ((y * size + x) * 4) as usize;
-        buf[i] = r;
-        buf[i + 1] = g;
-        buf[i + 2] = b;
-        buf[i + 3] = a;
+        buf[i] = rgba[0];
+        buf[i + 1] = rgba[1];
+        buf[i + 2] = rgba[2];
+        buf[i + 3] = rgba[3];
     }
 }
 
@@ -98,7 +98,7 @@ fn render_tray_rgba(rolling_pct: u32) -> Vec<u8> {
             // Background disc (dark, opaque) keeps the number legible on any
             // taskbar color.
             if dist <= r_bg {
-                put_pixel(&mut buf, size, px, py, 24, 26, 34, 255);
+                put_pixel(&mut buf, size, px, py, [24, 26, 34, 255]);
             }
 
             // Ring annulus: filled arc + dim track for the remainder.
@@ -111,9 +111,9 @@ fn render_tray_rgba(rolling_pct: u32) -> Vec<u8> {
                     rel += 2.0 * PI;
                 }
                 if rel <= sweep {
-                    put_pixel(&mut buf, size, px, py, cr, cg, cb, 255);
+                    put_pixel(&mut buf, size, px, py, [cr, cg, cb, 255]);
                 } else {
-                    put_pixel(&mut buf, size, px, py, 60, 64, 80, 255);
+                    put_pixel(&mut buf, size, px, py, [60, 64, 80, 255]);
                 }
             }
         }
@@ -136,8 +136,7 @@ fn render_tray_rgba(rolling_pct: u32) -> Vec<u8> {
     for (di, &d) in digits.iter().enumerate() {
         let glyph = DIGIT_FONT[d as usize];
         let gx = origin_x + (di * (glyph_w + gap) * scale) as i32;
-        for row in 0..glyph_h {
-            let row_bits = glyph[row];
+        for (row, row_bits) in glyph.iter().copied().enumerate().take(glyph_h) {
             for col in 0..glyph_w {
                 if (row_bits >> (4 - col)) & 1 == 1 {
                     for sy in 0..scale {
@@ -147,10 +146,7 @@ fn render_tray_rgba(rolling_pct: u32) -> Vec<u8> {
                                 size,
                                 gx + (col * scale + sx) as i32,
                                 origin_y + (row * scale + sy) as i32,
-                                240,
-                                242,
-                                250,
-                                255,
+                                [240, 242, 250, 255],
                             );
                         }
                     }

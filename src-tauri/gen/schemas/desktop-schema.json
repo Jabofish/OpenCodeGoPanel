@@ -177,6 +177,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the add_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-add-account",
+          "markdownDescription": "Enables the add_account command without any pre-configured scope."
+        },
+        {
           "description": "Enables the backup_local_data command without any pre-configured scope.",
           "type": "string",
           "const": "allow-backup-local-data",
@@ -285,6 +291,12 @@
           "markdownDescription": "Enables the install_update command without any pre-configured scope."
         },
         {
+          "description": "Enables the list_accounts command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-list-accounts",
+          "markdownDescription": "Enables the list_accounts command without any pre-configured scope."
+        },
+        {
           "description": "Enables the list_workspaces command without any pre-configured scope.",
           "type": "string",
           "const": "allow-list-workspaces",
@@ -307,6 +319,18 @@
           "type": "string",
           "const": "allow-refresh-now",
           "markdownDescription": "Enables the refresh_now command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the remove_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-remove-account",
+          "markdownDescription": "Enables the remove_account command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the rename_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-rename-account",
+          "markdownDescription": "Enables the rename_account command without any pre-configured scope."
         },
         {
           "description": "Enables the run_health_check command without any pre-configured scope.",
@@ -375,10 +399,22 @@
           "markdownDescription": "Enables the set_visibility command without any pre-configured scope."
         },
         {
+          "description": "Enables the switch_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-switch-account",
+          "markdownDescription": "Enables the switch_account command without any pre-configured scope."
+        },
+        {
           "description": "Enables the switch_workspace command without any pre-configured scope.",
           "type": "string",
           "const": "allow-switch-workspace",
           "markdownDescription": "Enables the switch_workspace command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the add_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-add-account",
+          "markdownDescription": "Denies the add_account command without any pre-configured scope."
         },
         {
           "description": "Denies the backup_local_data command without any pre-configured scope.",
@@ -489,6 +525,12 @@
           "markdownDescription": "Denies the install_update command without any pre-configured scope."
         },
         {
+          "description": "Denies the list_accounts command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-list-accounts",
+          "markdownDescription": "Denies the list_accounts command without any pre-configured scope."
+        },
+        {
           "description": "Denies the list_workspaces command without any pre-configured scope.",
           "type": "string",
           "const": "deny-list-workspaces",
@@ -511,6 +553,18 @@
           "type": "string",
           "const": "deny-refresh-now",
           "markdownDescription": "Denies the refresh_now command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the remove_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-remove-account",
+          "markdownDescription": "Denies the remove_account command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the rename_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-rename-account",
+          "markdownDescription": "Denies the rename_account command without any pre-configured scope."
         },
         {
           "description": "Denies the run_health_check command without any pre-configured scope.",
@@ -577,6 +631,12 @@
           "type": "string",
           "const": "deny-set-visibility",
           "markdownDescription": "Denies the set_visibility command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the switch_account command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-switch-account",
+          "markdownDescription": "Denies the switch_account command without any pre-configured scope."
         },
         {
           "description": "Denies the switch_workspace command without any pre-configured scope.",

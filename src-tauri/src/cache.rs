@@ -4,8 +4,14 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::RwLock;
 
-const CACHE_FILE: &str = "opencode-cache.json";
+pub const CACHE_FILE: &str = "opencode-cache.json";
 const CACHE_VERSION: u32 = 2;
+
+impl Default for PersistedCache {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedCache {
@@ -100,12 +106,15 @@ fn cache_version() -> u32 {
 
 pub struct AppCache {
     state: RwLock<PersistedCache>,
-    cache_path: PathBuf,
+    cache_path: RwLock<PathBuf>,
 }
 
 impl AppCache {
     pub fn new(data_dir: PathBuf) -> Self {
-        let cache_path = data_dir.join(CACHE_FILE);
+        Self::new_in(data_dir.join(CACHE_FILE))
+    }
+
+    pub fn new_in(cache_path: PathBuf) -> Self {
         let state = std::fs::read_to_string(&cache_path)
             .ok()
             .and_then(|content| Self::parse_cache(&content))
@@ -114,8 +123,21 @@ impl AppCache {
 
         Self {
             state: RwLock::new(state),
-            cache_path,
+            cache_path: RwLock::new(cache_path),
         }
+    }
+
+    /// Switch the active account's cache file: flush current, load target, swap path.
+    pub fn set_active_account(&self, new_path: PathBuf) -> Result<(), String> {
+        let mut state_guard = self
+            .state
+            .write()
+            .map_err(|_| "cache state lock poisoned".to_string())?;
+        let mut path_guard = self
+            .cache_path
+            .write()
+            .map_err(|_| "cache path lock poisoned".to_string())?;
+        crate::store_io::swap_store_file(&mut *state_guard, &mut path_guard, new_path)
     }
 
     /// Get the active workspace snapshot.
@@ -293,7 +315,11 @@ impl AppCache {
     }
 
     fn persist_locked(&self, state: &PersistedCache) -> Result<(), String> {
-        if let Some(parent) = self.cache_path.parent() {
+        let path = match self.cache_path.read() {
+            Ok(p) => p.clone(),
+            Err(_) => return Err("cache path lock poisoned".to_string()),
+        };
+        if let Some(parent) = path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 let message = format!("Failed to create cache dir {}: {}", parent.display(), e);
                 eprintln!("[Cache] {}", message);
@@ -303,12 +329,8 @@ impl AppCache {
 
         match serde_json::to_string_pretty(state) {
             Ok(content) => {
-                if let Err(e) = std::fs::write(&self.cache_path, content) {
-                    let message = format!(
-                        "Failed to write cache file {}: {}",
-                        self.cache_path.display(),
-                        e
-                    );
+                if let Err(e) = std::fs::write(&path, content) {
+                    let message = format!("Failed to write cache file {}: {}", path.display(), e);
                     eprintln!("[Cache] {}", message);
                     Err(message)
                 } else {
@@ -506,5 +528,66 @@ mod tests {
         assert_eq!(snapshot.workspaces[0].name, "Normalized");
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    mod account_tests {
+        use super::*;
+        use crate::models::AppDataSnapshot;
+
+        fn cache_temp_dir() -> PathBuf {
+            let pid = std::process::id();
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            std::env::temp_dir().join(format!("ocp-cache-account-{}-{}", pid, nanos))
+        }
+
+        fn snapshot_with(ws: &str) -> AppDataSnapshot {
+            let mut snapshot = AppDataSnapshot::empty();
+            snapshot.workspace_id = ws.into();
+            snapshot.error = None;
+            snapshot.last_updated = "2026-01-01T00:00:00Z".into();
+            snapshot
+        }
+
+        #[test]
+        fn set_active_account_swaps_and_persists() {
+            let dir = cache_temp_dir();
+            let _ = std::fs::remove_dir_all(&dir);
+            let a_path = dir.join("accounts").join("acc-a").join(CACHE_FILE);
+            let b_path = dir.join("accounts").join("acc-b").join(CACHE_FILE);
+
+            let cache = AppCache::new_in(a_path.clone());
+            cache.update(snapshot_with("ws-1"));
+            assert_eq!(cache.get().workspace_id, "ws-1");
+
+            cache.set_active_account(b_path).unwrap();
+            assert_eq!(cache.get().workspace_id, "");
+
+            cache.update(snapshot_with("ws-9"));
+            assert_eq!(cache.get().workspace_id, "ws-9");
+
+            cache.set_active_account(a_path).unwrap();
+            assert_eq!(cache.get().workspace_id, "ws-1");
+
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        #[test]
+        fn set_active_account_persists_old_to_disk() {
+            let dir = cache_temp_dir();
+            let _ = std::fs::remove_dir_all(&dir);
+            let a_path = dir.join("accounts").join("acc-a").join(CACHE_FILE);
+            let b_path = dir.join("accounts").join("acc-b").join(CACHE_FILE);
+
+            let cache = AppCache::new_in(a_path.clone());
+            cache.update(snapshot_with("ws-1"));
+            cache.set_active_account(b_path).unwrap();
+
+            let raw = std::fs::read_to_string(&a_path).unwrap();
+            assert!(raw.contains("ws-1"));
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

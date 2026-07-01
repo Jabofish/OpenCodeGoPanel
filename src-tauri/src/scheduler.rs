@@ -170,7 +170,10 @@ impl RefreshScheduler {
                 });
                 ctx.is_refreshing.store(false, Ordering::Release);
                 if let Some(ref handle) = app_handle {
-                    let _ = handle.emit("refresh-complete", serde_json::json!({ "status": "error", "reason": "not_logged_in" }));
+                    let _ = handle.emit(
+                        "refresh-complete",
+                        serde_json::json!({ "status": "error", "reason": "not_logged_in" }),
+                    );
                 }
                 return;
             }
@@ -277,8 +280,14 @@ impl RefreshScheduler {
                 });
                 ctx.is_refreshing.store(false, Ordering::Release);
                 if let Some(ref handle) = app_handle {
-                    let _ = handle.emit("auth-state-changed", serde_json::json!({ "state": "expired" }));
-                    let _ = handle.emit("refresh-complete", serde_json::json!({ "status": "error", "reason": "auth_expired" }));
+                    let _ = handle.emit(
+                        "auth-state-changed",
+                        serde_json::json!({ "state": "expired" }),
+                    );
+                    let _ = handle.emit(
+                        "refresh-complete",
+                        serde_json::json!({ "status": "error", "reason": "auth_expired" }),
+                    );
                 }
                 return;
             }
@@ -306,7 +315,8 @@ impl RefreshScheduler {
                 });
                 ctx.is_refreshing.store(false, Ordering::Release);
                 if let Some(ref handle) = app_handle {
-                    let _ = handle.emit("refresh-complete", serde_json::json!({ "status": "error" }));
+                    let _ =
+                        handle.emit("refresh-complete", serde_json::json!({ "status": "error" }));
                 }
                 return;
             }
@@ -341,7 +351,13 @@ impl RefreshScheduler {
             .await;
 
             if let Err(e) = records {
-                Self::handle_fetch_error(&records_cache, &costs_auth, e, "usage records", &spawn_app_handle);
+                Self::handle_fetch_error(
+                    &records_cache,
+                    &costs_auth,
+                    e,
+                    "usage records",
+                    &spawn_app_handle,
+                );
             }
 
             records_cache.update_refresh_state(|rs| rs.phase = "costs".into());
@@ -355,7 +371,13 @@ impl RefreshScheduler {
             .await;
 
             if let Err(e) = costs {
-                Self::handle_fetch_error(&costs_cache, &costs_auth, e, "monthly costs", &spawn_app_handle);
+                Self::handle_fetch_error(
+                    &costs_cache,
+                    &costs_auth,
+                    e,
+                    "monthly costs",
+                    &spawn_app_handle,
+                );
             }
 
             println!("[Refresh] slow data complete");
@@ -371,7 +393,7 @@ impl RefreshScheduler {
                 // Refresh the dynamic tray icon + tooltip from the new snapshot.
                 // Errors are non-fatal — a tray update must never break refresh.
                 if let Some(ref app) = spawn_app_handle {
-                    let _ = crate::tray_icon::update_tray(app, &snapshot);
+                    crate::tray_icon::update_tray(app, &snapshot);
                 }
 
                 // Budget projection & cost spike notifications
@@ -517,7 +539,10 @@ impl RefreshScheduler {
             });
             ctx.is_refreshing.store(false, Ordering::Release);
             if let Some(ref handle) = spawn_app_handle {
-                let _ = handle.emit("refresh-complete", serde_json::json!({ "status": "complete" }));
+                let _ = handle.emit(
+                    "refresh-complete",
+                    serde_json::json!({ "status": "complete" }),
+                );
             }
         });
 
@@ -690,7 +715,10 @@ impl RefreshScheduler {
             auth_store.clear_cookies().ok();
             cache.set_error("Session expired. Please log in again.".into());
             if let Some(ref handle) = app_handle {
-                let _ = handle.emit("auth-state-changed", serde_json::json!({ "state": "expired" }));
+                let _ = handle.emit(
+                    "auth-state-changed",
+                    serde_json::json!({ "state": "expired" }),
+                );
             }
         } else {
             println!("[Refresh] {} error: {}", label, error);
