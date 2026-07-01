@@ -975,9 +975,10 @@ pub async fn send_notification(app: AppHandle, title: String, body: String) -> R
 
 #[tauri::command]
 pub async fn get_local_data_status(
-    _history: tauri::State<'_, Arc<HistoryStore>>,
+    settings: tauri::State<'_, Arc<SettingsStore>>,
 ) -> Result<LocalDataStatus, String> {
-    Ok(maintenance::local_data_status())
+    let account_dir = account_dir_from_settings(&settings);
+    Ok(maintenance::local_data_status(account_dir.as_deref()))
 }
 
 #[tauri::command]
@@ -1012,11 +1013,14 @@ pub async fn open_exports_folder() -> Result<String, String> {
 pub async fn run_health_check(
     auth: tauri::State<'_, Arc<AuthStore>>,
     cache: tauri::State<'_, Arc<AppCache>>,
+    settings: tauri::State<'_, Arc<SettingsStore>>,
 ) -> Result<HealthCheck, String> {
     let snapshot = cache.get();
+    let account_dir = account_dir_from_settings(&settings);
     Ok(maintenance::run_health_check(
         auth.has_valid_cookies(),
         snapshot.error,
+        account_dir.as_deref(),
     ))
 }
 
@@ -1039,6 +1043,17 @@ pub async fn generate_report(
         &period,
         &data_dir,
     )
+}
+
+/// Resolve the active account's data directory: `<data_dir>/accounts/<id>`.
+/// Returns None when no account is active (legacy layout or fresh install).
+fn account_dir_from_settings(settings: &SettingsStore) -> Option<std::path::PathBuf> {
+    let active = settings.get().active_account_id;
+    if active.is_empty() {
+        None
+    } else {
+        Some(settings.accounts_root().join(&active))
+    }
 }
 
 #[cfg(test)]

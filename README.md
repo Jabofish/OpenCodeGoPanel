@@ -25,6 +25,11 @@ npm run tauri build    # build a Windows installer
 npm run test:rust      # run the Rust unit tests
 ```
 
+## Release 0.1.9
+
+- **Fix Local Data & Health for multi-account layout:** The Settings → Local Data & Health panel now correctly reports file sizes and health status for cache, history, and auth files under the active account's `accounts/<id>/` directory instead of always checking the obsolete root-level paths. The `get_local_data_status` and `run_health_check` commands now accept the active account directory and resolve per-account file paths automatically.
+- **Fix Clear History for multi-account layout:** The "Clear history" action no longer attempts to delete a non-existent `opencode-history.json` at the data root. History clearing is now handled entirely by `HistoryStore::clear()`, which operates on the correct per-account file path.
+
 ## Release 0.1.8
 
 - **Multi-account support:** Add, rename, remove, and switch between independent accounts — each with its own auth cookies, usage history, cache, workspace profiles, budget, and threshold. Switch from the titlebar dropdown or the Settings Accounts panel.

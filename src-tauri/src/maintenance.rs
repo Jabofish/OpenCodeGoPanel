@@ -18,8 +18,9 @@ pub(crate) enum ClearLocalDataEffect {
     ClearHistory,
 }
 
-pub(crate) fn local_data_status() -> LocalDataStatus {
-    local_data_status_in(&data_dir())
+pub(crate) fn local_data_status(account_dir: Option<&Path>) -> LocalDataStatus {
+    let dir = data_dir();
+    local_data_status_in(&dir, account_dir)
 }
 
 pub(crate) fn backup_local_data(
@@ -55,15 +56,19 @@ pub(crate) fn should_auto_backup() -> bool {
     !backup_exists_today(&dir, &today)
 }
 
-pub(crate) fn run_health_check(has_auth: bool, last_refresh_error: Option<String>) -> HealthCheck {
-    health_check_in(&data_dir(), has_auth, last_refresh_error)
+pub(crate) fn run_health_check(
+    has_auth: bool,
+    last_refresh_error: Option<String>,
+    account_dir: Option<&Path>,
+) -> HealthCheck {
+    health_check_in(&data_dir(), account_dir, has_auth, last_refresh_error)
 }
 
 fn data_dir() -> PathBuf {
     paths::get_data_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn local_data_status_in(data_dir: &Path) -> LocalDataStatus {
+fn local_data_status_in(data_dir: &Path, account_dir: Option<&Path>) -> LocalDataStatus {
     let mut export_bytes = 0u64;
     let mut export_count = 0u32;
     let export_dir = data_dir.join(EXPORTS_DIR);
@@ -96,12 +101,18 @@ fn local_data_status_in(data_dir: &Path) -> LocalDataStatus {
         }
     }
 
+    // Per-account files live under accounts/<id>/ after migration.
+    // Fall back to the root data_dir when no active account is set.
+    let resolve = |name: &str| -> PathBuf {
+        account_dir.map_or_else(|| data_dir.join(name), |d| d.join(name))
+    };
+
     LocalDataStatus {
         data_dir: data_dir.to_string_lossy().into_owned(),
-        cache_bytes: file_bytes(data_dir, CACHE_FILE),
-        history_bytes: file_bytes(data_dir, HISTORY_FILE),
-        settings_bytes: file_bytes(data_dir, SETTINGS_FILE),
-        auth_bytes: file_bytes(data_dir, AUTH_FILE),
+        cache_bytes: file_bytes_at(&resolve(CACHE_FILE)),
+        history_bytes: file_bytes_at(&resolve(HISTORY_FILE)),
+        settings_bytes: file_bytes_at(&data_dir.join(SETTINGS_FILE)),
+        auth_bytes: file_bytes_at(&resolve(AUTH_FILE)),
         export_bytes,
         export_count,
         backup_bytes,
@@ -218,10 +229,7 @@ fn rotate_backups(backup_dir: &Path) -> Result<(), String> {
 fn clear_local_data_in(data_dir: &Path, scope: &str) -> Result<ClearLocalDataEffect, String> {
     match scope {
         "cache" => Ok(ClearLocalDataEffect::ClearCache),
-        "history" => {
-            let _ = std::fs::remove_file(data_dir.join(HISTORY_FILE));
-            Ok(ClearLocalDataEffect::ClearHistory)
-        }
+        "history" => Ok(ClearLocalDataEffect::ClearHistory),
         "exports" => {
             clear_export_files(data_dir)?;
             Ok(ClearLocalDataEffect::None)
@@ -255,14 +263,19 @@ fn clear_export_files(data_dir: &Path) -> Result<(), String> {
 
 fn health_check_in(
     data_dir: &Path,
+    account_dir: Option<&Path>,
     has_auth: bool,
     last_refresh_error: Option<String>,
 ) -> HealthCheck {
+    let resolve = |name: &str| -> PathBuf {
+        account_dir.map_or_else(|| data_dir.join(name), |d| d.join(name))
+    };
+
     let (data_dir_exists, data_dir_available, data_dir_error) = local_data_dir_health(data_dir);
-    let cache_file = local_data_file_health(&data_dir.join(CACHE_FILE));
+    let cache_file = local_data_file_health(&resolve(CACHE_FILE));
     let settings_file = local_data_file_health(&data_dir.join(SETTINGS_FILE));
-    let history_file = local_data_file_health(&data_dir.join(HISTORY_FILE));
-    let auth_file = local_data_file_health(&data_dir.join(AUTH_FILE));
+    let history_file = local_data_file_health(&resolve(HISTORY_FILE));
+    let auth_file = local_data_file_health(&resolve(AUTH_FILE));
     let cache_ok = local_data_file_ok(&cache_file);
     let settings_ok = local_data_file_ok(&settings_file);
     let history_ok = local_data_file_ok(&history_file);
@@ -290,10 +303,8 @@ fn ensure_exports_dir(data_dir: &Path) -> Result<PathBuf, String> {
     Ok(export_dir)
 }
 
-fn file_bytes(data_dir: &Path, name: &str) -> u64 {
-    std::fs::metadata(data_dir.join(name))
-        .map(|m| m.len())
-        .unwrap_or(0)
+fn file_bytes_at(path: &Path) -> u64 {
+    std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
 }
 
 fn local_data_file_health(path: &Path) -> DataFileHealth {
@@ -413,7 +424,7 @@ mod tests {
         std::fs::write(exports.join("b.csv"), b"12345").expect("write export file");
         std::fs::create_dir_all(exports.join("nested")).expect("create nested export directory");
 
-        let status = local_data_status_in(&dir);
+        let status = local_data_status_in(&dir, None);
 
         assert_eq!(status.cache_bytes, 5);
         assert_eq!(status.export_bytes, 8);
@@ -618,10 +629,36 @@ mod tests {
         std::fs::write(backups.join("auto-backup-20260619.json"), b"1234567890")
             .expect("write backup");
 
-        let status = local_data_status_in(&dir);
+        let status = local_data_status_in(&dir, None);
 
         assert_eq!(status.backup_bytes, 15);
         assert_eq!(status.backup_count, 2);
+
+        std::fs::remove_dir_all(&dir).expect("remove temp test directory");
+    }
+
+    #[test]
+    fn local_data_status_resolves_per_account_files() {
+        let dir = unique_temp_path("status-account");
+        let account_dir = dir.join("accounts").join("acc-test");
+        std::fs::create_dir_all(&account_dir).expect("create account directory");
+
+        // Write files in the account directory.
+        std::fs::write(account_dir.join(CACHE_FILE), b"aaaaa").expect("write cache");
+        std::fs::write(account_dir.join(HISTORY_FILE), b"bbb").expect("write history");
+        std::fs::write(account_dir.join(AUTH_FILE), b"ccccccc").expect("write auth");
+
+        // With account_dir passed, sizes come from the account directory.
+        let status = local_data_status_in(&dir, Some(&account_dir));
+        assert_eq!(status.cache_bytes, 5);
+        assert_eq!(status.history_bytes, 3);
+        assert_eq!(status.auth_bytes, 7);
+
+        // Without account_dir, falls back to the root (files don't exist there).
+        let root_status = local_data_status_in(&dir, None);
+        assert_eq!(root_status.cache_bytes, 0);
+        assert_eq!(root_status.history_bytes, 0);
+        assert_eq!(root_status.auth_bytes, 0);
 
         std::fs::remove_dir_all(&dir).expect("remove temp test directory");
     }
