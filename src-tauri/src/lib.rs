@@ -50,13 +50,12 @@ pub fn run() {
     let settings_store = Arc::new(SettingsStore::new(data_dir.clone()));
     println!("[Backend] SettingsStore created");
 
-    let active_account_id = settings_store.get().active_account_id.clone();
+    let active_account_id = settings_store.ensure_default_account().unwrap_or_else(|e| {
+        eprintln!("[Backend] Failed to ensure default account: {}", e);
+        settings_store.get().active_account_id.clone()
+    });
     let accounts_root = data_dir.join(crate::account::ACCOUNTS_DIR);
-    let account_dir = if active_account_id.is_empty() {
-        accounts_root.join("__none__")
-    } else {
-        accounts_root.join(&active_account_id)
-    };
+    let account_dir = accounts_root.join(&active_account_id);
 
     let auth_store = Arc::new(AuthStore::new(accounts_root, active_account_id.clone()));
     println!("[Backend] AuthStore created");
@@ -128,6 +127,7 @@ pub fn run() {
             commands::send_notification,
             commands::get_local_data_status,
             commands::backup_local_data,
+            commands::restore_local_data,
             commands::clear_local_data,
             commands::open_exports_folder,
             commands::run_health_check,

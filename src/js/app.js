@@ -35,7 +35,6 @@ console.log('[App] Tauri API check:', {
 // --- State ---
 let currentTab = 'usage';
 let isPinned = true;
-let refreshTimer = null;
 let snapshotTimer = null;
 let latestSnapshot = null;
 let latestRefreshState = null;
@@ -44,6 +43,7 @@ let settings = loadSettings();
 let miniBadgeExpanded = false;
 let miniBadgeRestorePosition = null;
 let lastManualRefreshAt = 0;
+let loginWindowOpenPending = false;
 let workspaceSwitchState = {
   switching: false,
   previousId: '',
@@ -230,6 +230,27 @@ const settingActions = {
       showToast('Backup failed: ' + e, { type: 'error' });
     }
   },
+  restoreLocalData: async () => {
+    try {
+      const backupJson = await readBackupJsonFromFile();
+      if (!backupJson) return;
+      const result = await invoke('restore_local_data', { backupJson });
+      settings = await loadSettingsFromBackend();
+      accountsCache = await refreshAccounts();
+      resetAccountSelectorRenderKey();
+      workspaceSelectRenderKey = '';
+      lastSnapshotSignature = '';
+      latestHistory = await fetchHistory(historyDays);
+      await refreshMaintenanceStatus({ render: false });
+      await renderAll();
+      const restored = result?.historyEntries ?? 0;
+      showToast('Restored backup (' + restored + ' history entries)', { type: 'success' });
+    }
+    catch (e) {
+      console.error('Restore failed:', e);
+      showToast('Restore failed: ' + e, { type: 'error' });
+    }
+  },
   refreshMaintenanceStatus: async () => refreshMaintenanceStatus(),
   refreshLocalDataStatus: async () => refreshMaintenanceStatus(),
   runHealthCheck: async () => refreshMaintenanceStatus({ forceHealthToast: true }),
@@ -376,7 +397,7 @@ function loadSettings() {
   try {
     return {
       ...defaultSettings(),
-      ...JSON.parse(localStorage.getItem('ocp-settings') || '{}'),
+      ...loadLocalStorageSettings(),
     };
   } catch (_) {
     return defaultSettings();
@@ -386,7 +407,7 @@ function loadSettings() {
 async function loadSettingsFromBackend() {
   const fallback = {
     ...defaultSettings(),
-    ...JSON.parse(localStorage.getItem('ocp-settings') || '{}'),
+    ...loadLocalStorageSettings(),
   };
   if (!invoke) return fallback;
   try {
@@ -405,6 +426,51 @@ async function loadSettingsFromBackend() {
     console.warn('[Settings] Backend settings unavailable, using localStorage:', e);
     return fallback;
   }
+}
+
+function loadLocalStorageSettings() {
+  try {
+    return JSON.parse(localStorage.getItem('ocp-settings') || '{}');
+  } catch (e) {
+    console.warn('[Settings] Ignoring corrupt localStorage settings:', e);
+    return {};
+  }
+}
+
+function readBackupJsonFromFile() {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      input.remove();
+      resolve(value);
+    };
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.style.display = 'none';
+    input.addEventListener('change', async () => {
+      try {
+        const file = input.files?.[0];
+        if (!file) {
+          finish('');
+          return;
+        }
+        finish(await file.text());
+      } catch (e) {
+        input.remove();
+        reject(e);
+      }
+    }, { once: true });
+    window.addEventListener('focus', () => {
+      setTimeout(() => {
+        if (!input.files?.length) finish('');
+      }, 300);
+    }, { once: true });
+    document.body.appendChild(input);
+    input.click();
+  });
 }
 
 function saveSettings() {
@@ -1127,11 +1193,15 @@ async function renderAll() {
       console.log('[Render] Has auth:', hasAuth);
 
       if (!hasAuth) {
+        if (loginWindowOpenPending) return;
+        loginWindowOpenPending = true;
         console.log('[Render] Will open login window in 1s...');
         // Auto-open login window on first load
         setTimeout(() => {
           console.log('[Render] Opening login window...');
-          openLoginWindow().catch(err => console.error('[Render] Failed to open login:', err));
+          openLoginWindow()
+            .catch(err => console.error('[Render] Failed to open login:', err))
+            .finally(() => { loginWindowOpenPending = false; });
         }, 1000);
       }
     }
@@ -1515,12 +1585,6 @@ function startRefreshLoop() {
     const snapshot = await fetchSnapshot();
     applySnapshot(snapshot);
   }, 3000);
-
-  refreshTimer = setInterval(async () => {
-    if (settings.autoRefresh) {
-      await triggerRefresh();
-    }
-  }, 30000); // 30s visible refresh
 }
 
 function buildQuickPeekState() {

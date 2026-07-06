@@ -275,6 +275,16 @@ impl AppCache {
         self.persist_locked(&writer)
     }
 
+    /// Replace all cached workspace snapshots with a restored snapshot.
+    pub fn replace_with_snapshot(&self, snapshot: AppDataSnapshot) -> Result<(), String> {
+        let mut writer = self
+            .state
+            .write()
+            .map_err(|_| "Cache lock poisoned while restoring cache".to_string())?;
+        *writer = PersistedCache::from_legacy(snapshot).normalize();
+        self.persist_locked(&writer)
+    }
+
     fn parse_cache(content: &str) -> Option<PersistedCache> {
         let value = serde_json::from_str::<serde_json::Value>(content).ok()?;
         let is_v2 = value.get("snapshots").is_some()

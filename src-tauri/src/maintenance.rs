@@ -1,7 +1,10 @@
+use crate::cache::AppCache;
+use crate::history::HistoryStore;
 use crate::models::{AppDataSnapshot, DataFileHealth, HealthCheck, HistoryEntry, LocalDataStatus};
 use crate::paths;
-use crate::settings_store::AppSettings;
+use crate::settings_store::{AppSettings, SettingsStore};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const CACHE_FILE: &str = "opencode-cache.json";
@@ -16,6 +19,23 @@ pub(crate) enum ClearLocalDataEffect {
     None,
     ClearCache,
     ClearHistory,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreLocalDataResult {
+    pub active_account_id: String,
+    pub history_entries: usize,
+    pub workspace_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalDataBackup {
+    version: u32,
+    settings: AppSettings,
+    history: Vec<HistoryEntry>,
+    cache: AppDataSnapshot,
 }
 
 pub(crate) fn local_data_status(account_dir: Option<&Path>) -> LocalDataStatus {
@@ -35,6 +55,31 @@ pub(crate) fn clear_local_data(scope: &str) -> Result<ClearLocalDataEffect, Stri
     clear_local_data_in(&data_dir(), scope)
 }
 
+pub(crate) fn restore_local_data(
+    backup_json: &str,
+    settings: &SettingsStore,
+    history: &HistoryStore,
+    cache: &AppCache,
+) -> Result<RestoreLocalDataResult, String> {
+    let backup = parse_backup_json(backup_json)?;
+    let history_entries = backup.history.len();
+    let workspace_id = backup.cache.workspace_id.clone();
+
+    settings.save(backup.settings)?;
+    let active_account_id = settings.ensure_default_account()?;
+    let account_dir = settings.accounts_root().join(&active_account_id);
+    history.set_active_account(account_dir.join(crate::history::HISTORY_FILE))?;
+    cache.set_active_account(account_dir.join(crate::cache::CACHE_FILE))?;
+    history.replace_all(backup.history)?;
+    cache.replace_with_snapshot(backup.cache)?;
+
+    Ok(RestoreLocalDataResult {
+        active_account_id,
+        history_entries,
+        workspace_id,
+    })
+}
+
 pub(crate) fn open_exports_folder() -> Result<String, String> {
     let export_dir = ensure_exports_dir(&data_dir())?;
     let path_str = export_dir.to_string_lossy().to_string();
@@ -50,10 +95,10 @@ pub(crate) fn auto_backup(
     auto_backup_at(&data_dir(), &settings, &history, &cache, Utc::now())
 }
 
-pub(crate) fn should_auto_backup() -> bool {
+pub(crate) fn should_auto_backup(settings: &AppSettings) -> bool {
     let dir = data_dir().join(BACKUPS_DIR);
     let today = Utc::now().format("%Y%m%d").to_string();
-    !backup_exists_today(&dir, &today)
+    !backup_exists_today(&dir, &today, &settings.active_account_id)
 }
 
 pub(crate) fn run_health_check(
@@ -160,11 +205,11 @@ fn auto_backup_at(
     let today = now.format("%Y%m%d").to_string();
 
     // Skip if today's backup already exists
-    if backup_exists_today(&backup_dir, &today) {
+    if backup_exists_today(&backup_dir, &today, &settings.active_account_id) {
         return Ok(None);
     }
 
-    let path = backup_dir.join(format!("auto-backup-{}.json", today));
+    let path = backup_dir.join(auto_backup_filename(&today, &settings.active_account_id));
 
     let backup = serde_json::json!({
         "version": 1,
@@ -181,8 +226,8 @@ fn auto_backup_at(
     )
     .map_err(|e| e.to_string())?;
 
-    // Rotate old backups, keeping only the most recent MAX_AUTO_BACKUPS
-    rotate_backups(&backup_dir)?;
+    // Rotate old backups for this account only.
+    rotate_backups(&backup_dir, &settings.active_account_id)?;
 
     Ok(Some(path.to_string_lossy().into_owned()))
 }
@@ -193,16 +238,42 @@ fn ensure_backups_dir(data_dir: &Path) -> Result<PathBuf, String> {
     Ok(backup_dir)
 }
 
-fn backup_exists_today(backup_dir: &Path, today: &str) -> bool {
-    let filename = format!("auto-backup-{}.json", today);
-    backup_dir.join(filename).exists()
+fn backup_exists_today(backup_dir: &Path, today: &str, account_id: &str) -> bool {
+    backup_dir
+        .join(auto_backup_filename(today, account_id))
+        .exists()
 }
 
-fn rotate_backups(backup_dir: &Path) -> Result<(), String> {
+fn auto_backup_filename(today: &str, account_id: &str) -> String {
+    let safe_account = sanitize_backup_account_id(account_id);
+    if safe_account.is_empty() {
+        format!("auto-backup-{}.json", today)
+    } else {
+        format!("auto-backup-{}-{}.json", today, safe_account)
+    }
+}
+
+fn sanitize_backup_account_id(account_id: &str) -> String {
+    account_id
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn rotate_backups(backup_dir: &Path, account_id: &str) -> Result<(), String> {
     let mut backups: Vec<_> = std::fs::read_dir(backup_dir)
         .map_err(|e| e.to_string())?
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_name().to_string_lossy().starts_with("auto-backup-"))
+        .filter(|e| {
+            auto_backup_file_belongs_to_account(&e.file_name().to_string_lossy(), account_id)
+        })
         .collect();
 
     if backups.len() <= MAX_AUTO_BACKUPS {
@@ -224,6 +295,32 @@ fn rotate_backups(backup_dir: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn auto_backup_file_belongs_to_account(filename: &str, account_id: &str) -> bool {
+    if !filename.starts_with("auto-backup-") || !filename.ends_with(".json") {
+        return false;
+    }
+
+    let safe_account = sanitize_backup_account_id(account_id);
+    if safe_account.is_empty() {
+        let date_part = filename
+            .strip_prefix("auto-backup-")
+            .and_then(|s| s.strip_suffix(".json"))
+            .unwrap_or_default();
+        return date_part.len() == 8 && date_part.chars().all(|c| c.is_ascii_digit());
+    }
+
+    filename.ends_with(&format!("-{}.json", safe_account))
+}
+
+fn parse_backup_json(backup_json: &str) -> Result<LocalDataBackup, String> {
+    let backup: LocalDataBackup =
+        serde_json::from_str(backup_json).map_err(|e| format!("Invalid backup JSON: {}", e))?;
+    if backup.version != 1 {
+        return Err(format!("Unsupported backup version: {}", backup.version));
+    }
+    Ok(backup)
 }
 
 fn clear_local_data_in(data_dir: &Path, scope: &str) -> Result<ClearLocalDataEffect, String> {
@@ -552,6 +649,38 @@ mod tests {
     }
 
     #[test]
+    fn auto_backup_is_scoped_per_account() {
+        let dir = unique_temp_path("auto-backup-account");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let cache = AppDataSnapshot::empty();
+        let now = Utc::now();
+        let mut first = AppSettings {
+            active_account_id: "acc-a".into(),
+            ..AppSettings::default()
+        };
+        let second = AppSettings {
+            active_account_id: "acc-b".into(),
+            ..AppSettings::default()
+        };
+
+        let first_path = auto_backup_at(&dir, &first, &[], &cache, now)
+            .expect("first account backup")
+            .expect("first account path");
+        let second_path = auto_backup_at(&dir, &second, &[], &cache, now)
+            .expect("second account backup")
+            .expect("second account path");
+        assert_ne!(first_path, second_path);
+        assert!(first_path.contains("acc-a"));
+        assert!(second_path.contains("acc-b"));
+
+        first.active_account_id = "acc-a".into();
+        let duplicate = auto_backup_at(&dir, &first, &[], &cache, now).expect("duplicate check");
+        assert!(duplicate.is_none());
+
+        std::fs::remove_dir_all(&dir).expect("remove temp test directory");
+    }
+
+    #[test]
     fn rotate_backups_keeps_only_max_files() {
         let dir = unique_temp_path("auto-backup-rotate");
         let backup_dir = dir.join(BACKUPS_DIR);
@@ -574,7 +703,7 @@ mod tests {
             .count();
         assert_eq!(count_before, MAX_AUTO_BACKUPS + 3);
 
-        rotate_backups(&backup_dir).expect("rotate should succeed");
+        rotate_backups(&backup_dir, "").expect("rotate should succeed");
 
         let count_after = std::fs::read_dir(&backup_dir)
             .unwrap()
@@ -603,7 +732,45 @@ mod tests {
         let dir = unique_temp_path("backup-exists-empty");
         std::fs::create_dir_all(&dir).expect("create temp dir");
 
-        assert!(!backup_exists_today(&dir, "20260619"));
+        assert!(!backup_exists_today(&dir, "20260619", ""));
+
+        std::fs::remove_dir_all(&dir).expect("remove temp test directory");
+    }
+
+    #[test]
+    fn rotate_backups_keeps_accounts_separate() {
+        let dir = unique_temp_path("auto-backup-rotate-account");
+        let backup_dir = dir.join(BACKUPS_DIR);
+        std::fs::create_dir_all(&backup_dir).expect("create backups dir");
+
+        for i in 0..(MAX_AUTO_BACKUPS + 2) {
+            std::fs::write(
+                backup_dir.join(format!("auto-backup-202601{:02}-acc-a.json", i + 1)),
+                b"{}",
+            )
+            .expect("write acc-a backup");
+        }
+        std::fs::write(backup_dir.join("auto-backup-20260101-acc-b.json"), b"{}")
+            .expect("write acc-b backup");
+
+        rotate_backups(&backup_dir, "acc-a").expect("rotate acc-a");
+
+        let acc_a_count = std::fs::read_dir(&backup_dir)
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .ok()
+                    .map(|e| {
+                        auto_backup_file_belongs_to_account(
+                            &e.file_name().to_string_lossy(),
+                            "acc-a",
+                        )
+                    })
+                    .unwrap_or(false)
+            })
+            .count();
+        assert_eq!(acc_a_count, MAX_AUTO_BACKUPS);
+        assert!(backup_dir.join("auto-backup-20260101-acc-b.json").exists());
 
         std::fs::remove_dir_all(&dir).expect("remove temp test directory");
     }
@@ -614,8 +781,24 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("create temp dir");
         std::fs::write(dir.join("auto-backup-20260619.json"), b"{}").expect("write");
 
-        assert!(backup_exists_today(&dir, "20260619"));
-        assert!(!backup_exists_today(&dir, "20260620"));
+        assert!(backup_exists_today(&dir, "20260619", ""));
+        assert!(!backup_exists_today(&dir, "20260620", ""));
+
+        std::fs::remove_dir_all(&dir).expect("remove temp test directory");
+    }
+
+    #[test]
+    fn backup_exists_today_distinguishes_accounts() {
+        let dir = unique_temp_path("backup-exists-account");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        std::fs::write(dir.join("auto-backup-20260619-acc-a.json"), b"{}").expect("write");
+
+        assert!(backup_exists_today(&dir, "20260619", "acc-a"));
+        assert!(!backup_exists_today(&dir, "20260619", "acc-b"));
+        assert_eq!(
+            auto_backup_filename("20260619", "acc/a"),
+            "auto-backup-20260619-acc_a.json"
+        );
 
         std::fs::remove_dir_all(&dir).expect("remove temp test directory");
     }
@@ -659,6 +842,59 @@ mod tests {
         assert_eq!(root_status.cache_bytes, 0);
         assert_eq!(root_status.history_bytes, 0);
         assert_eq!(root_status.auth_bytes, 0);
+
+        std::fs::remove_dir_all(&dir).expect("remove temp test directory");
+    }
+
+    #[test]
+    fn restore_local_data_replaces_settings_history_and_cache() {
+        let dir = unique_temp_path("restore-local-data");
+        let settings = crate::settings_store::SettingsStore::new(dir.clone());
+        let active = settings.ensure_default_account().expect("default account");
+        let account_dir = settings.accounts_root().join(&active);
+        let history =
+            crate::history::HistoryStore::new_in(account_dir.join(crate::history::HISTORY_FILE));
+        let cache = crate::cache::AppCache::new_in(account_dir.join(crate::cache::CACHE_FILE));
+
+        let mut restored_settings = settings.get();
+        restored_settings.theme = "light".into();
+        restored_settings.monthly_budget = 12345;
+        let mut restored_cache = AppDataSnapshot::empty();
+        restored_cache.workspace_id = "ws-restored".into();
+        restored_cache.last_updated = "2026-01-01T00:00:00Z".into();
+        restored_cache.error = None;
+        let restored_history = vec![HistoryEntry {
+            date: Utc::now().format("%Y-%m-%d").to_string(),
+            workspace_id: "ws-restored".into(),
+            rolling_pct: 10,
+            weekly_pct: 20,
+            monthly_pct: 30,
+            total_cost: 123,
+            recorded_at: Utc::now().to_rfc3339(),
+        }];
+        let backup = serde_json::json!({
+            "version": 1,
+            "createdAt": "2026-01-01T00:00:00Z",
+            "settings": restored_settings,
+            "history": restored_history,
+            "cache": restored_cache,
+            "auth": null,
+        });
+
+        let result = restore_local_data(
+            &serde_json::to_string(&backup).unwrap(),
+            &settings,
+            &history,
+            &cache,
+        )
+        .expect("restore backup");
+
+        assert_eq!(result.active_account_id, active);
+        assert_eq!(result.history_entries, 1);
+        assert_eq!(settings.get().theme, "light");
+        assert_eq!(settings.get().monthly_budget, 12345);
+        assert_eq!(cache.get().workspace_id, "ws-restored");
+        assert_eq!(history.get_entries(36500).len(), 1);
 
         std::fs::remove_dir_all(&dir).expect("remove temp test directory");
     }

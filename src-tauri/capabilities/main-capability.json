@@ -50,6 +50,7 @@
     "allow-send-notification",
     "allow-get-local-data-status",
     "allow-backup-local-data",
+    "allow-restore-local-data",
     "allow-clear-local-data",
     "allow-open-exports-folder",
     "allow-run-health-check",

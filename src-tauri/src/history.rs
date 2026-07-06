@@ -186,6 +186,18 @@ impl HistoryStore {
         }
     }
 
+    /// Replace all history entries from a restored backup.
+    pub fn replace_all(&self, mut entries: Vec<HistoryEntry>) -> Result<(), String> {
+        prune_and_sort_entries(&mut entries, Utc::now().date_naive(), DEFAULT_KEEP_DAYS);
+        let mut writer = self
+            .data
+            .write()
+            .map_err(|_| "History lock poisoned while restoring history".to_string())?;
+        *writer = entries;
+        self.persist_locked(&writer);
+        Ok(())
+    }
+
     /// Rebuild history from the cache snapshot.
     ///
     /// Skips rebuilding if the workspace already has existing history entries.
@@ -505,7 +517,7 @@ mod history_store_tests {
         HISTORY_FILE,
     };
     use crate::models::{AppDataSnapshot, DailyCostEntry};
-    use chrono::{NaiveDate, Utc};
+    use chrono::{Local, NaiveDate};
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -565,7 +577,7 @@ mod history_store_tests {
     fn record_replaces_today_per_workspace_and_filters_by_workspace() {
         let dir = temp_data_dir("record");
         let store = HistoryStore::new(dir.clone());
-        let today = Utc::now().format("%Y-%m-%d").to_string();
+        let today = Local::now().format("%Y-%m-%d").to_string();
 
         let mut first = AppDataSnapshot::empty();
         first.workspace_id = "ws-a".into();

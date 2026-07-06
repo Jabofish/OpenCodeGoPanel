@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
-use tauri_plugin_updater::UpdaterExt;
+use tauri_plugin_updater::{Update, UpdaterExt};
 
 /// Information about an available update, shared with the frontend.
 #[derive(Clone, Serialize)]
@@ -30,6 +30,12 @@ pub enum UpdateStatus {
 /// Managed state: holds the pending update between check → download → install.
 pub struct PendingUpdate {
     pub info: Mutex<Option<UpdateInfo>>,
+    package: Mutex<Option<PendingUpdatePackage>>,
+}
+
+struct PendingUpdatePackage {
+    update: Update,
+    bytes: Vec<u8>,
 }
 
 impl Default for PendingUpdate {
@@ -42,6 +48,31 @@ impl PendingUpdate {
     pub fn new() -> Self {
         Self {
             info: Mutex::new(None),
+            package: Mutex::new(None),
+        }
+    }
+
+    fn set_info(&self, info: UpdateInfo) {
+        if let Ok(mut guard) = self.info.lock() {
+            *guard = Some(info);
+        }
+        if let Ok(mut guard) = self.package.lock() {
+            *guard = None;
+        }
+    }
+
+    fn set_package(&self, update: Update, bytes: Vec<u8>) {
+        if let Ok(mut guard) = self.package.lock() {
+            *guard = Some(PendingUpdatePackage { update, bytes });
+        }
+    }
+
+    fn clear(&self) {
+        if let Ok(mut guard) = self.info.lock() {
+            *guard = None;
+        }
+        if let Ok(mut guard) = self.package.lock() {
+            *guard = None;
         }
     }
 }
@@ -121,9 +152,7 @@ async fn do_check_for_update(
 
             // Store for later download
             if let Some(pending) = app.try_state::<PendingUpdate>() {
-                if let Ok(mut guard) = pending.info.lock() {
-                    *guard = Some(info.clone());
-                }
+                pending.set_info(info.clone());
             }
 
             emit_status(&app, UpdateStatus::Available { info: info.clone() });
@@ -147,7 +176,10 @@ pub async fn check_for_update(
 }
 
 #[tauri::command]
-pub async fn download_update(app: AppHandle) -> Result<(), String> {
+pub async fn download_update(
+    app: AppHandle,
+    pending: tauri::State<'_, PendingUpdate>,
+) -> Result<(), String> {
     println!("[Updater] Downloading update...");
 
     let updater = app.updater().map_err(|e| {
@@ -164,11 +196,17 @@ pub async fn download_update(app: AppHandle) -> Result<(), String> {
     match updater.check().await {
         Ok(Some(update)) => {
             let app_clone = app.clone();
-            update
-                .download_and_install(
+            let mut downloaded_bytes = 0u64;
+            let bytes = update
+                .download(
                     |chunk_length, total| {
+                        downloaded_bytes = downloaded_bytes.saturating_add(chunk_length as u64);
                         let progress = if let Some(t) = total {
-                            (chunk_length as f64 / t as f64) * 100.0
+                            if t == 0 {
+                                0.0
+                            } else {
+                                ((downloaded_bytes as f64 / t as f64) * 100.0).min(100.0)
+                            }
                         } else {
                             0.0
                         };
@@ -192,12 +230,7 @@ pub async fn download_update(app: AppHandle) -> Result<(), String> {
                     msg
                 })?;
 
-            // Clear pending state after successful download
-            if let Some(pending) = app.try_state::<PendingUpdate>() {
-                if let Ok(mut guard) = pending.info.lock() {
-                    *guard = None;
-                }
-            }
+            pending.set_package(update, bytes);
 
             Ok(())
         }
@@ -225,10 +258,32 @@ pub async fn download_update(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn install_update(app: AppHandle) -> Result<(), String> {
+pub async fn install_update(
+    app: AppHandle,
+    pending: tauri::State<'_, PendingUpdate>,
+) -> Result<(), String> {
     println!("[Updater] Installing update and restarting...");
     emit_status(&app, UpdateStatus::Installing);
-    app.restart();
+    let guard = pending
+        .package
+        .lock()
+        .map_err(|_| "Pending update lock poisoned".to_string())?;
+    let package = guard
+        .as_ref()
+        .ok_or_else(|| "No downloaded update is ready to install".to_string())?;
+    package.update.install(&package.bytes).map_err(|e| {
+        let msg = format!("Install failed: {}", e);
+        emit_status(
+            &app,
+            UpdateStatus::Error {
+                message: msg.clone(),
+            },
+        );
+        msg
+    })?;
+    drop(guard);
+    pending.clear();
+    app.restart()
 }
 
 /// Silent background check used at startup — never returns errors to caller.

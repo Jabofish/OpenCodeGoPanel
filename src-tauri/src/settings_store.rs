@@ -255,6 +255,52 @@ impl SettingsStore {
         &self.accounts_root
     }
 
+    /// Ensure there is always a real active account for backend stores.
+    ///
+    /// The frontend also creates an account before login, but backend refresh
+    /// and storage objects are initialized earlier. Keeping this invariant here
+    /// prevents cache/history/auth writes from falling into a placeholder path.
+    pub fn ensure_default_account(&self) -> Result<String, String> {
+        let (accounts, active_account_id) = {
+            let reader = self
+                .data
+                .read()
+                .map_err(|_| "settings lock poisoned".to_string())?;
+
+            if !reader.active_account_id.is_empty()
+                && reader
+                    .accounts
+                    .iter()
+                    .any(|account| account.id == reader.active_account_id)
+            {
+                (reader.accounts.clone(), reader.active_account_id.clone())
+            } else if let Some(first) = reader.accounts.first() {
+                let mut manager = crate::account::AccountsManager::new(
+                    reader.accounts.clone(),
+                    reader.active_account_id.clone(),
+                );
+                manager.set_active(&first.id)?;
+                manager.into_parts()
+            } else {
+                let mut manager = crate::account::AccountsManager::new(Vec::new(), String::new());
+                manager.add(None);
+                manager.into_parts()
+            }
+        };
+
+        self.save_account_index(accounts, active_account_id.clone())?;
+
+        let account_dir = self.accounts_root.join(&active_account_id);
+        std::fs::create_dir_all(&account_dir)
+            .map_err(|e| format!("create account dir {}: {}", account_dir.display(), e))?;
+
+        if !self.account_path(&active_account_id).exists() {
+            self.save_account_settings(&active_account_id, &AccountSettings::defaults())?;
+        }
+
+        Ok(active_account_id)
+    }
+
     /// Persist only the global account index and active pointer.
     pub fn save_account_index(
         &self,
@@ -349,11 +395,11 @@ mod tests {
         let dir = temp_dir();
         let store = SettingsStore::new(dir.clone());
         let s = store.get();
-        assert_eq!(s.auto_refresh, true);
+        assert!(s.auto_refresh);
         assert_eq!(s.hotkey, "Ctrl+Shift+U");
         assert_eq!(s.mini_badge_display, "percent");
-        assert_eq!(s.notify_quota, true);
-        assert_eq!(s.launch_on_startup, true);
+        assert!(s.notify_quota);
+        assert!(s.launch_on_startup);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -397,14 +443,14 @@ mod tests {
     fn partial_json_gets_struct_defaults() {
         let partial = r#"{"autoRefresh":false,"compactMode":false}"#;
         let parsed: AppSettings = serde_json::from_str(partial).unwrap();
-        assert_eq!(parsed.auto_refresh, false);
-        assert_eq!(parsed.compact_mode, false);
+        assert!(!parsed.auto_refresh);
+        assert!(!parsed.compact_mode);
         assert_eq!(parsed.hotkey, "Ctrl+Shift+U");
         assert_eq!(parsed.mini_badge_display, "percent");
-        assert_eq!(parsed.notify_quota, true);
+        assert!(parsed.notify_quota);
         assert_eq!(parsed.theme, "system");
         assert_eq!(parsed.report_frequency, "off");
-        assert_eq!(parsed.report_auto_generate, false);
+        assert!(!parsed.report_auto_generate);
     }
 
     #[test]
@@ -418,7 +464,7 @@ mod tests {
         .unwrap();
         let store = SettingsStore::new(dir.clone());
         let s = store.get();
-        assert_eq!(s.auto_refresh, false);
+        assert!(!s.auto_refresh);
         assert_eq!(s.hotkey, "Ctrl+Shift+U");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -436,7 +482,7 @@ mod tests {
         store.save(s).unwrap();
         let store2 = SettingsStore::new(dir.clone());
         let s2 = store2.get();
-        assert_eq!(s2.mini_badge_mode, true);
+        assert!(s2.mini_badge_mode);
         assert_eq!(s2.usage_threshold, 75);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -605,6 +651,69 @@ mod tests {
         let merged = store.get();
         assert_eq!(merged.monthly_budget, 6000);
         assert_eq!(merged.usage_threshold, 80);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_default_account_creates_stable_account() {
+        let dir = temp_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = SettingsStore::new(dir.clone());
+
+        let active = store.ensure_default_account().unwrap();
+        assert!(!active.is_empty());
+
+        let settings = store.get();
+        assert_eq!(settings.active_account_id, active);
+        assert_eq!(settings.accounts.len(), 1);
+        assert_eq!(settings.accounts[0].id, active);
+
+        let account_path = dir.join(ACCOUNTS_DIR).join(&active).join(ACCOUNT_FILE);
+        assert!(account_path.exists());
+        let account: AccountSettings =
+            serde_json::from_str(&std::fs::read_to_string(account_path).unwrap()).unwrap();
+        assert_eq!(
+            account.monthly_budget,
+            AccountSettings::defaults().monthly_budget
+        );
+
+        let same_active = store.ensure_default_account().unwrap();
+        assert_eq!(same_active, active);
+        assert_eq!(store.get().accounts.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn ensure_default_account_repairs_invalid_active_pointer() {
+        let dir = temp_dir();
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = SettingsStore::new(dir.clone());
+
+        let mut manager = crate::account::AccountsManager::new(Vec::new(), String::new());
+        let first = manager.add(Some("A".into())).clone();
+        let (accounts, _) = manager.into_parts();
+        store
+            .save_account_index(accounts, "missing-account".into())
+            .unwrap_err();
+
+        {
+            let mut settings = store.get();
+            settings.accounts = vec![first.clone()];
+            settings.active_account_id = "missing-account".into();
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join(SETTINGS_FILE),
+                serde_json::to_string_pretty(&settings).unwrap(),
+            )
+            .unwrap();
+        }
+
+        let repaired = SettingsStore::new(dir.clone());
+        let active = repaired.ensure_default_account().unwrap();
+        assert_eq!(active, first.id);
+        assert_eq!(repaired.get().active_account_id, first.id);
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

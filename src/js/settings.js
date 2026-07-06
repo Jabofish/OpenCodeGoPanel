@@ -46,6 +46,7 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
           buildAction('setting-run-health-check', 'Run health check', !!actions?.runHealthCheck, 'settings-diagnostic-action') +
           buildAction('setting-open-exports', 'Open exports folder', true, 'settings-diagnostic-action') +
           buildAction('setting-backup', 'Backup settings/history', true, 'settings-diagnostic-action') +
+          buildAction('setting-restore', 'Restore backup JSON', true, 'settings-diagnostic-action danger') +
           buildAction('setting-export-json', 'Export snapshot JSON', true, 'settings-diagnostic-action') +
           buildAction('setting-export-records', 'Export usage CSV', true, 'settings-diagnostic-action') +
           buildAction('setting-export-costs', 'Export costs CSV', true, 'settings-diagnostic-action') +
@@ -160,6 +161,7 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
   bindAction('setting-run-health-check', actions?.runHealthCheck);
   bindAction('setting-open-exports', actions.openExportsFolder);
   bindAction('setting-backup', actions.backupLocalData);
+  bindAction('setting-restore', actions.restoreLocalData);
   bindAction('setting-clear-exports', () => actions.clearLocalData('exports'));
   bindAction('setting-clear-history', () => actions.clearLocalData('history'));
   bindAction('setting-rename-workspace', actions.renameWorkspace);

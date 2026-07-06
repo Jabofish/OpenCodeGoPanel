@@ -16,6 +16,7 @@ use tokio::time::Duration;
 const USAGE_PAGE_SIZE: usize = 50;
 const MAX_USAGE_PAGES: u32 = 10_000;
 const USAGE_UPDATE_EVERY_PAGES: u32 = 5;
+const AUTO_REFRESH_DISABLED_POLL_SECS: u64 = 5;
 const DEFAULT_VISIBLE_INTERVAL_SECS: u64 = 30;
 const MIN_VISIBLE_INTERVAL_SECS: u64 = 15;
 const MIN_HIDDEN_INTERVAL_SECS: u64 = 60;
@@ -83,7 +84,9 @@ impl RefreshScheduler {
             threshold_notifications: Arc::new(ThresholdNotificationState::new()),
             is_visible,
             is_refreshing: Arc::new(AtomicBool::new(false)),
-            threshold: Arc::new(AtomicU32::new(0)),
+            threshold: Arc::new(AtomicU32::new(normalize_threshold(
+                settings.usage_threshold,
+            ))),
             alerted: Arc::new(AtomicBool::new(false)),
             app_handle: Mutex::new(None),
             visible_interval_secs: Arc::new(AtomicU64::new(normalize_visible_interval(
@@ -120,6 +123,11 @@ impl RefreshScheduler {
     /// Start adaptive refresh loop with configurable intervals.
     pub async fn start_adaptive(&self) {
         loop {
+            if !self.settings_store.get().auto_refresh {
+                tokio::time::sleep(Duration::from_secs(AUTO_REFRESH_DISABLED_POLL_SECS)).await;
+                continue;
+            }
+
             let visible = self.is_visible.load(Ordering::Relaxed);
             let base_secs = if visible {
                 self.visible_interval_secs.load(Ordering::Relaxed)
@@ -421,7 +429,7 @@ impl RefreshScheduler {
                 }
 
                 // Auto-backup if enabled and today's backup doesn't exist
-                if settings.auto_backup && crate::maintenance::should_auto_backup() {
+                if settings.auto_backup && crate::maintenance::should_auto_backup(&settings) {
                     let history_entries = records_history.get_entries(90);
                     match crate::maintenance::auto_backup(
                         settings.clone(),
@@ -792,6 +800,14 @@ fn normalize_hidden_interval(secs: u64) -> u64 {
     }
 }
 
+fn normalize_threshold(threshold: u32) -> u32 {
+    if threshold == 0 || (50..=95).contains(&threshold) {
+        threshold
+    } else {
+        0
+    }
+}
+
 /// Calculate exponential backoff multiplier based on consecutive failures.
 /// Returns 1 for 0-2 failures, then doubles for each additional failure, capped at 64x.
 fn calculate_backoff(failures: u32) -> u64 {
@@ -815,6 +831,21 @@ mod tests {
         assert_eq!(normalize_hidden_interval(0), 0);
         assert_eq!(normalize_hidden_interval(1), MIN_HIDDEN_INTERVAL_SECS);
         assert_eq!(normalize_hidden_interval(7200), MAX_REFRESH_INTERVAL_SECS);
+    }
+
+    #[test]
+    fn threshold_normalization_keeps_valid_values() {
+        assert_eq!(normalize_threshold(0), 0);
+        assert_eq!(normalize_threshold(50), 50);
+        assert_eq!(normalize_threshold(80), 80);
+        assert_eq!(normalize_threshold(95), 95);
+    }
+
+    #[test]
+    fn threshold_normalization_disables_invalid_values() {
+        assert_eq!(normalize_threshold(1), 0);
+        assert_eq!(normalize_threshold(49), 0);
+        assert_eq!(normalize_threshold(96), 0);
     }
 
     #[test]

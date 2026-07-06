@@ -8,6 +8,10 @@ use std::path::PathBuf;
 ///
 /// The caller holds its own `RwLock` write-guard across this call so that
 /// no concurrent `record`/`update` can interleave.
+///
+/// If the target file exists but cannot be parsed, the old state remains
+/// active and the error is returned to the caller instead of silently showing
+/// an empty store.
 pub fn swap_store_file<T>(
     current: &mut T,
     path: &mut PathBuf,
@@ -23,7 +27,8 @@ where
     //    materialize it with the default so the new path is a stable,
     //    writable location for subsequent `record`/`update` calls.
     let existed = new_path.exists();
-    *current = load_or_default(&new_path);
+    let next = load_or_default(&new_path)?;
+    *current = next;
     if !existed {
         persist(current, &new_path)?;
     }
@@ -42,10 +47,13 @@ fn persist<T: Serialize>(value: &T, path: &PathBuf) -> Result<(), String> {
     std::fs::write(path, content).map_err(|e| format!("write {}: {}", path.display(), e))
 }
 
-fn load_or_default<T: DeserializeOwned + Default>(path: &PathBuf) -> T {
+fn load_or_default<T: DeserializeOwned + Default>(path: &PathBuf) -> Result<T, String> {
     match std::fs::read_to_string(path) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_else(|_| T::default()),
-        Err(_) => T::default(),
+        Ok(content) => {
+            serde_json::from_str(&content).map_err(|e| format!("parse {}: {}", path.display(), e))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
+        Err(e) => Err(format!("read {}: {}", path.display(), e)),
     }
 }
 
@@ -146,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn swap_with_corrupt_new_file_falls_back_to_default() {
+    fn swap_with_corrupt_new_file_returns_error_and_keeps_current() {
         let dir = temp_dir();
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -158,8 +166,13 @@ mod tests {
         let new_path = dir.join("corrupt.json");
         std::fs::write(&new_path, "{ this is not json").unwrap();
 
-        swap_store_file(&mut current, &mut path, new_path).unwrap();
-        assert_eq!(current.items, Vec::<String>::new());
+        let err = swap_store_file(&mut current, &mut path, new_path).unwrap_err();
+        assert!(err.contains("parse"));
+        assert_eq!(current.items, vec!["a".to_string()]);
+        assert_eq!(path, dir.join("old.json"));
+        assert!(std::fs::read_to_string(dir.join("old.json"))
+            .unwrap()
+            .contains("\"a\""));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -766,10 +766,24 @@ pub async fn export_data(
 
 fn csv_cell(value: impl AsRef<str>) -> String {
     let s = value.as_ref();
-    if s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r') {
-        format!("\"{}\"", s.replace('"', "\"\""))
+    let formula_head = s.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    let protected = if matches!(
+        formula_head.as_bytes().first(),
+        Some(b'=' | b'+' | b'-' | b'@')
+    ) {
+        format!("'{}", s)
     } else {
         s.to_string()
+    };
+
+    if protected.contains(',')
+        || protected.contains('"')
+        || protected.contains('\n')
+        || protected.contains('\r')
+    {
+        format!("\"{}\"", protected.replace('"', "\"\""))
+    } else {
+        protected
     }
 }
 
@@ -991,6 +1005,21 @@ pub async fn backup_local_data(
 }
 
 #[tauri::command]
+pub async fn restore_local_data(
+    app: AppHandle,
+    cache: tauri::State<'_, Arc<AppCache>>,
+    history: tauri::State<'_, Arc<HistoryStore>>,
+    settings: tauri::State<'_, Arc<SettingsStore>>,
+    auth: tauri::State<'_, Arc<AuthStore>>,
+    backup_json: String,
+) -> Result<maintenance::RestoreLocalDataResult, String> {
+    let result = maintenance::restore_local_data(&backup_json, &settings, &history, &cache)?;
+    auth.set_active_account(&result.active_account_id);
+    let _ = app.emit("local-data-restored", result.clone());
+    Ok(result)
+}
+
+#[tauri::command]
 pub async fn clear_local_data(
     cache: tauri::State<'_, Arc<AppCache>>,
     history: tauri::State<'_, Arc<HistoryStore>>,
@@ -1127,6 +1156,17 @@ mod tests {
     }
 
     #[test]
+    fn csv_cell_escapes_formulas_and_quotes() {
+        assert_eq!(csv_cell("plain"), "plain");
+        assert_eq!(csv_cell("a,b"), "\"a,b\"");
+        assert_eq!(csv_cell("=cmd|calc"), "'=cmd|calc");
+        assert_eq!(csv_cell(" =cmd|calc"), "' =cmd|calc");
+        assert_eq!(csv_cell("\t+SUM(1,2)"), "\"'\t+SUM(1,2)\"");
+        assert_eq!(csv_cell("+SUM(1,2)"), "\"'+SUM(1,2)\"");
+        assert_eq!(csv_cell("@lookup\"x\""), "\"'@lookup\"\"x\"\"\"");
+    }
+
+    #[test]
     fn parse_super_u() {
         let (mods, code) = parse_hotkey("Super+U").unwrap();
         assert_eq!(code, Code::KeyU);
@@ -1244,6 +1284,7 @@ mod tests {
             "send_notification",
             "get_local_data_status",
             "backup_local_data",
+            "restore_local_data",
             "clear_local_data",
             "open_exports_folder",
             "run_health_check",

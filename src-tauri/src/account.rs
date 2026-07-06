@@ -428,10 +428,8 @@ mod tests {
         )
         .unwrap();
 
-        let mut legacy = AppSettings::default();
-        legacy.monthly_budget = 6000;
-        legacy.usage_threshold = 80;
-        legacy.workspace_profiles.insert(
+        let mut workspace_profiles = std::collections::HashMap::new();
+        workspace_profiles.insert(
             "ws-1".to_string(),
             WorkspaceProfile {
                 alias: "Main".into(),
@@ -439,7 +437,13 @@ mod tests {
                 mini_badge_source: "auto".into(),
             },
         );
-        legacy.recent_workspaces = vec!["ws-1".into()];
+        let legacy = AppSettings {
+            monthly_budget: 6000,
+            usage_threshold: 80,
+            workspace_profiles,
+            recent_workspaces: vec!["ws-1".into()],
+            ..AppSettings::default()
+        };
         std::fs::write(
             dir.join(crate::settings_store::SETTINGS_FILE),
             serde_json::to_string_pretty(&legacy).unwrap(),
