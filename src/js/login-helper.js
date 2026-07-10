@@ -75,7 +75,6 @@ function addExtractButton() {
   });
 
   document.body.appendChild(button);
-  console.log('[LoginHelper] Manual save button added');
 }
 
 function addStatusLine() {
@@ -126,19 +125,15 @@ async function doExtractCookies() {
     })
     .filter(c => c.name && c.value);
 
-  console.log('[LoginHelper] Extracted visible cookies:', cookies.length);
-
   // 2. Extract workspace_id from URL or localStorage
   let workspaceId = '';
 
   const pathMatch = window.location.pathname.match(/workspace\/([a-zA-Z0-9_-]+)/);
   if (pathMatch) {
     workspaceId = pathMatch[1];
-    console.log('[LoginHelper] Found workspace_id in URL:', workspaceId);
   } else {
     workspaceId = localStorage.getItem('workspace_id') ||
                   localStorage.getItem('workspaceId') || '';
-    console.log('[LoginHelper] Found workspace_id in localStorage:', workspaceId);
   }
 
   // 3. Try to find workspace_id in page content if still empty
@@ -147,7 +142,6 @@ async function doExtractCookies() {
     const contentMatch = bodyText.match(/workspace[:\s]+([a-zA-Z0-9_-]+)/i);
     if (contentMatch) {
       workspaceId = contentMatch[1];
-      console.log('[LoginHelper] Found workspace_id in page content:', workspaceId);
     }
   }
 
@@ -157,14 +151,12 @@ async function doExtractCookies() {
 
   const cookiesJson = JSON.stringify(cookies);
 
-  console.log('[LoginHelper] Calling extract_cookies_from_webview...');
   const success = await invoke('extract_cookies_from_webview', {
     cookiesJson: cookiesJson,
     workspaceId: workspaceId
   });
 
   if (success) {
-    console.log('[LoginHelper] Login saved successfully for workspace:', workspaceId);
     return { success: true };
   } else {
     return { success: false, error: 'Extraction returned false' };
@@ -186,8 +178,6 @@ async function extractAndSave(button) {
       button.style.background = 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)';
       button.style.color = 'white';
       autoSaveTriggered = true; // Mark as saved so auto-detect won't re-trigger
-
-      console.log('[LoginHelper] Login saved, window will close shortly');
 
       setTimeout(() => {
         button.textContent = 'Closing...';
@@ -223,7 +213,6 @@ async function attemptAutoSave() {
   if (autoSaveTriggered) return;
   autoSaveTriggered = true; // Set early to prevent re-entry during debounce
 
-  console.log('[LoginHelper] Auto-save triggered — waiting 800ms for page to settle...');
   setStatusLine('Login detected \u2014 saving\u2026', 'rgba(160, 176, 224, 0.9)');
 
   // Debounce: wait for cookies and page state to stabilize
@@ -243,8 +232,6 @@ async function attemptAutoSave() {
         btn.style.color = 'white';
         btn.disabled = true;
       }
-
-      console.log('[LoginHelper] Auto-save complete, window will close');
       // The backend closes the window via auth-state-changed event.
     } else {
       // Auto-save failed — reset the guard so the user can try manually
@@ -316,7 +303,6 @@ function monitorWorkspaceNavigation() {
     if (url !== lastUrl) {
       lastUrl = url;
       checkWorkspacePage();
-      console.log('[LoginHelper] URL changed:', url);
     }
   }).observe(document, { subtree: true, childList: true });
 
@@ -330,5 +316,3 @@ if (document.readyState === 'loading') {
 } else {
   setupLoginHelper();
 }
-
-console.log('[LoginHelper] Login helper module loaded (auto-detect enabled)');

@@ -9,7 +9,7 @@ import { getWorkspaceDisplayName, getWorkspaceProfile, sortWorkspaces } from './
 import { refreshAccounts, renderAccountSelector, resetAccountSelectorRenderKey, setupAccountSelector } from './accounts.js';
 import { showToast, dismissAllToasts, hideBadgeBubble, isBadgeBubbleActive } from './toast.js';
 import { getMaintenanceStatus, refreshMaintenanceStatus as refreshMaintenanceStatusData } from './maintenance.js';
-import { initUpdater, checkForUpdateManually, consumePendingUpdate, isUpdateOverlayActive } from './updater.js';
+import { initUpdater, checkForUpdateManually, consumePendingUpdate, isUpdateOverlayActive, hasDownloadedUpdateReady, showDownloadedUpdateReady } from './updater.js';
 
 // Check if Tauri API is available
 if (!window.__TAURI__) {
@@ -36,6 +36,7 @@ console.log('[App] Tauri API check:', {
 let currentTab = 'usage';
 let isPinned = true;
 let snapshotTimer = null;
+let snapshotPollInFlight = false;
 let latestSnapshot = null;
 let latestRefreshState = null;
 let lastSnapshotSignature = '';
@@ -51,6 +52,10 @@ let workspaceSwitchState = {
 };
 let accountsCache = [];
 let settingsInlineAction = null;
+let localBackups = [];
+let localBackupsLoaded = false;
+let localBackupsOpen = false;
+let healthCheckOpen = false;
 
 let modelView = {
   query: '',
@@ -222,6 +227,8 @@ const settingActions = {
   backupLocalData: async () => {
     try {
       const path = await invoke('backup_local_data');
+      await loadLocalBackups({ force: true });
+      localBackupsOpen = true;
       await refreshMaintenanceStatus();
       showToast('Backup saved: ' + path, { type: 'success' });
     }
@@ -234,26 +241,46 @@ const settingActions = {
     try {
       const backupJson = await readBackupJsonFromFile();
       if (!backupJson) return;
-      const result = await invoke('restore_local_data', { backupJson });
-      settings = await loadSettingsFromBackend();
-      accountsCache = await refreshAccounts();
-      resetAccountSelectorRenderKey();
-      workspaceSelectRenderKey = '';
-      lastSnapshotSignature = '';
-      latestHistory = await fetchHistory(historyDays);
-      await refreshMaintenanceStatus({ render: false });
-      await renderAll();
-      const restored = result?.historyEntries ?? 0;
-      showToast('Restored backup (' + restored + ' history entries)', { type: 'success' });
+      showRestoreLocalDataConfirm(backupJson);
     }
     catch (e) {
       console.error('Restore failed:', e);
       showToast('Restore failed: ' + e, { type: 'error' });
     }
   },
+  restoreListedBackup: async (backupId) => {
+    try {
+      const backupJson = await invoke('read_local_backup', { backupId });
+      showRestoreLocalDataConfirm(backupJson);
+    } catch (e) {
+      console.error('Failed to read backup:', e);
+      showToast('Failed to read backup: ' + e, { type: 'error' });
+    }
+  },
+  getLocalBackups: () => localBackups,
+  hasLocalBackupsLoaded: () => localBackupsLoaded,
+  isLocalBackupsOpen: () => localBackupsOpen,
+  toggleLocalBackups: async () => {
+    localBackupsOpen = !localBackupsOpen;
+    if (localBackupsOpen) await loadLocalBackups();
+    renderSettingsWithMaintenance(latestSnapshot);
+  },
+  refreshLocalBackups: async () => {
+    await loadLocalBackups({ force: true });
+    localBackupsOpen = true;
+    renderSettingsWithMaintenance(latestSnapshot);
+  },
   refreshMaintenanceStatus: async () => refreshMaintenanceStatus(),
   refreshLocalDataStatus: async () => refreshMaintenanceStatus(),
-  runHealthCheck: async () => refreshMaintenanceStatus({ forceHealthToast: true }),
+  runHealthCheck: async () => {
+    healthCheckOpen = true;
+    await refreshMaintenanceStatus({ forceHealthToast: true });
+  },
+  isHealthCheckOpen: () => healthCheckOpen,
+  toggleHealthCheck: () => {
+    healthCheckOpen = !healthCheckOpen;
+    renderSettingsWithMaintenance(latestSnapshot);
+  },
   clearCacheData: async () => settingActions.clearLocalData('cache'),
   clearAuthData: async () => settingActions.clearLocalData('auth'),
   clearSettingsData: async () => settingActions.clearLocalData('settings'),
@@ -261,7 +288,10 @@ const settingActions = {
   renameWorkspace: () => renameCurrentWorkspace(),
   toggleFavoriteWorkspace: () => toggleFavoriteCurrentWorkspace(),
   setAutoBackup: (value) => updateSettings({ autoBackup: value }),
-  setAutoUpdate: (value) => updateSettings({ autoUpdate: value }),
+  setAutoUpdate: async (value) => {
+    await updateSettings({ autoUpdate: value });
+    if (value) await checkForUpdateManually();
+  },
   setLaunchOnStartup: async (value) => {
     try {
       await invoke('set_autostart', { enabled: value });
@@ -273,11 +303,14 @@ const settingActions = {
       renderSettingsWithMaintenance(latestSnapshot);
     }
   },
-  checkForUpdate: () => checkForUpdateManually(),
+  checkForUpdate: () => {
+    if (!showDownloadedUpdateReady()) checkForUpdateManually();
+  },
+  hasDownloadedUpdate: () => hasDownloadedUpdateReady(),
   generateReport: async (period) => {
     try {
-      await invoke('generate_report', { period });
-      showToast('Report generated (' + period + ')', { type: 'success' });
+      const path = await invoke('generate_report', { period });
+      showToast('Report generated: ' + path, { type: 'success' });
     } catch (e) {
       showToast('Report generation failed: ' + e, { type: 'error' });
     }
@@ -288,8 +321,11 @@ const settingActions = {
   },
   setReportFrequency: (value) => updateSettings({ reportFrequency: value }),
   setReportAutoGenerate: (value) => updateSettings({ reportAutoGenerate: value }),
-  toggleAdvanced: () => {
+  toggleAdvanced: async () => {
     settingsAdvancedOpen = !settingsAdvancedOpen;
+    if (settingsAdvancedOpen) {
+      await loadLocalBackups();
+    }
     renderSettingsWithMaintenance(latestSnapshot);
   },
 };
@@ -347,7 +383,15 @@ async function submitSettingsInlineAction(value) {
         break;
       case 'clear-local-data':
         settingsInlineAction = null;
-        await performClearLocalData(action.scope);
+        if (action.scope === 'login') {
+          await clearAuth();
+        } else {
+          await performClearLocalData(action.scope);
+        }
+        break;
+      case 'restore-local-data':
+        settingsInlineAction = null;
+        await restoreBackupJson(action.backupJson);
         break;
       default:
         settingsInlineAction = null;
@@ -401,6 +445,59 @@ function loadSettings() {
     };
   } catch (_) {
     return defaultSettings();
+  }
+}
+
+function showRestoreLocalDataConfirm(backupJson) {
+  const preview = buildBackupPreview(backupJson);
+  settingsInlineAction = {
+    kind: 'restore-local-data',
+    backupJson,
+    preview,
+  };
+  settingsAdvancedOpen = true;
+  renderSettingsWithMaintenance(latestSnapshot);
+}
+
+function buildBackupPreview(backupJson) {
+  try {
+    const backup = JSON.parse(backupJson);
+    return {
+      version: backup.version,
+      createdAt: backup.createdAt || '',
+      activeAccountId: backup.settings?.activeAccountId || backup.settings?.active_account_id || '',
+      workspaceId: backup.cache?.workspaceId || backup.cache?.workspace_id || '',
+      historyEntries: Array.isArray(backup.history) ? backup.history.length : 0,
+    };
+  } catch (_) {
+    return {
+      version: '?',
+      createdAt: '',
+      activeAccountId: '',
+      workspaceId: '',
+      historyEntries: 0,
+    };
+  }
+}
+
+async function restoreBackupJson(backupJson) {
+  try {
+    const result = await invoke('restore_local_data', { backupJson });
+    settings = await loadSettingsFromBackend();
+    accountsCache = await refreshAccounts();
+    resetAccountSelectorRenderKey();
+    workspaceSelectRenderKey = '';
+    lastSnapshotSignature = '';
+    latestHistory = await fetchHistory(historyDays);
+    await refreshMaintenanceStatus({ render: false });
+    await loadLocalBackups({ force: true });
+    await renderAll();
+    const restored = result?.historyEntries ?? 0;
+    const workspace = result?.workspaceId ? ' · workspace ' + result.workspaceId : '';
+    showToast('Restored backup (' + restored + ' history entries)' + workspace, { type: 'success' });
+  } catch (e) {
+    console.error('Restore failed:', e);
+    showToast('Restore failed: ' + e, { type: 'error' });
   }
 }
 
@@ -1103,18 +1200,20 @@ async function ensureAccountForLogin() {
   loadAccounts();
 }
 
-async function triggerRefresh() {
+async function triggerRefresh(options = {}) {
   const now = Date.now();
-  const cooldownMs = 10000; // 10s cooldown for manual refresh
-  if (now - lastManualRefreshAt < cooldownMs) {
+  const cooldownMs = 10000; // 10s cooldown for user-initiated refresh
+  if (!options.force && now - lastManualRefreshAt < cooldownMs) {
     console.log('[Refresh] Cooldown active, skipping manual refresh');
-    return;
+    return false;
   }
-  lastManualRefreshAt = now;
 
   console.log('[Refresh] Triggering refresh...');
   try {
-    if (!invoke) return;
+    if (!invoke) return false;
+    if (!options.force) {
+      lastManualRefreshAt = now;
+    }
     // Immediately show refreshing state
     const btn = document.getElementById('btn-refresh');
     if (btn) {
@@ -1123,9 +1222,15 @@ async function triggerRefresh() {
     }
     await invoke('refresh_now');
     console.log('[Refresh] Refresh triggered');
+    return true;
   } catch (e) {
     console.error('[Refresh] Refresh failed:', e);
+    if (!options.force) {
+      lastManualRefreshAt = 0;
+    }
+    updateRefreshButton(latestSnapshot || {});
     showToast('Refresh failed: ' + e, { type: 'error' });
+    return false;
   }
 }
 
@@ -1144,8 +1249,10 @@ async function clearAuth() {
   try {
     if (!invoke) return;
     await invoke('clear_auth');
-    await triggerRefresh();
+    await refreshMaintenanceStatus({ render: false });
+    await triggerRefresh({ force: true });
     await renderAll();
+    showToast('Logged out', { type: 'success' });
   } catch (e) {
     console.error('[Auth] Clear failed:', e);
     showToast('Failed to clear auth: ' + e, { type: 'error' });
@@ -1157,8 +1264,10 @@ async function clearCache() {
   try {
     if (!invoke) return;
     await invoke('clear_cache');
+    await refreshMaintenanceStatus({ render: false });
     await renderAll();
-    await triggerRefresh();
+    await triggerRefresh({ force: true });
+    showToast('Cache cleared', { type: 'success' });
   } catch (e) {
     console.error('[Cache] Clear failed:', e);
     showToast('Failed to clear cache: ' + e, { type: 'error' });
@@ -1318,11 +1427,11 @@ function applyWorkspaceAlias(alias) {
 async function performClearLocalData(scope) {
   try {
     await invoke('clear_local_data', { scope });
+    await refreshMaintenanceStatus({ render: false });
     if (scope === 'cache') {
-      await triggerRefresh();
+      await triggerRefresh({ force: true });
       await renderAll();
     } else {
-      await refreshMaintenanceStatus({ render: false });
       await renderAll();
     }
     showToast('Cleared ' + scope + ' data', { type: 'success' });
@@ -1349,7 +1458,25 @@ async function refreshMaintenanceStatus(options = {}) {
   }
 }
 
+async function loadLocalBackups(options = {}) {
+  if (!invoke) return [];
+  if (localBackupsLoaded && !options.force) return localBackups;
+  try {
+    const backups = await invoke('list_local_backups');
+    localBackups = Array.isArray(backups) ? backups : [];
+    localBackupsLoaded = true;
+  } catch (e) {
+    console.warn('[Maintenance] Failed to list backups:', e);
+    localBackups = [];
+    localBackupsLoaded = true;
+  }
+  return localBackups;
+}
+
 function renderSettingsWithMaintenance(snapshot) {
+  if (settingsAdvancedOpen && !localBackupsLoaded) {
+    loadLocalBackups().then(() => renderSettingsWithMaintenance(latestSnapshot));
+  }
   const { localDataStatus, localHealthCheck } = getMaintenanceStatus();
   renderSettingsTab(
     snapshot,
@@ -1498,6 +1625,9 @@ function switchTab(name) {
   if (name === 'settings') {
     renderSettingsWithMaintenance(latestSnapshot);
     refreshMaintenanceStatus().catch(e => console.warn('[Maintenance] Refresh failed:', e));
+    if (settingsAdvancedOpen && localBackupsOpen) {
+      loadLocalBackups().then(() => renderSettingsWithMaintenance(latestSnapshot));
+    }
   }
   if (name === 'trends') {
     fetchHistory(historyDays).then(history => {
@@ -1581,9 +1711,16 @@ function setupTabs() {
 
 // --- Refresh loop ---
 function startRefreshLoop() {
+  if (snapshotTimer) clearInterval(snapshotTimer);
   snapshotTimer = setInterval(async () => {
-    const snapshot = await fetchSnapshot();
-    applySnapshot(snapshot);
+    if (snapshotPollInFlight) return;
+    snapshotPollInFlight = true;
+    try {
+      const snapshot = await fetchSnapshot();
+      applySnapshot(snapshot);
+    } finally {
+      snapshotPollInFlight = false;
+    }
   }, 3000);
 }
 

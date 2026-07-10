@@ -28,6 +28,7 @@ export function renderAccountSelector(accounts, activeId) {
   accountSelectRenderKey = key;
 
   sel.innerHTML = '';
+  sel.dataset.activeId = activeId || '';
   if (safeAccounts.length === 0) {
     sel.style.display = 'none';
     return;
@@ -53,13 +54,16 @@ export function setupAccountSelector(onSwitched) {
   sel.addEventListener('change', async () => {
     const accountId = sel.value;
     if (!accountId || !window.__TAURI__?.core?.invoke) return;
+    const previousId = sel.dataset.activeId || '';
     const footer = document.getElementById('footer-time');
     if (footer) footer.textContent = 'Switching account...';
     try {
       await window.__TAURI__.core.invoke('switch_account', { accountId });
+      sel.dataset.activeId = accountId;
       if (onSwitched) await onSwitched();
     } catch (e) {
       console.error('[Accounts] switch failed:', e);
+      if (previousId) sel.value = previousId;
       if (footer) footer.textContent = 'Account switch failed';
       if (onSwitched) await onSwitched({ failed: true });
     }

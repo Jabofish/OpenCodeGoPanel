@@ -10,10 +10,70 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
   const profile = (settings.workspaceProfiles || {})[snapshot?.workspace_id] || {};
   const taskbarStatus = 'Hidden';
   const effectiveHealthCheck = healthCheck || snapshot?.healthCheck || localDataStatus?.healthCheck || null;
+  const healthCheckOpen = !!actions?.isHealthCheckOpen?.();
+  const localBackups = typeof actions?.getLocalBackups === 'function' ? actions.getLocalBackups() : [];
+  const localBackupsLoaded = !!actions?.hasLocalBackupsLoaded?.();
+  const localBackupsOpen = !!actions?.isLocalBackupsOpen?.();
+  const updateActionLabel = actions?.hasDownloadedUpdate?.() ? 'Install downloaded update' : 'Check for updates now';
 
-  // Less-frequently used groups (Hotkey, Reports, Updates, Local Data & Health)
-  // are tucked into an "Advanced settings" collapsible, closed by default.
+  // Less-frequently used groups are tucked into an "Advanced settings"
+  // collapsible, closed by default.
   const advancedHtml =
+    '<div class="settings-group">' +
+      '<div class="settings-title">Window</div>' +
+      buildSelect('setting-theme', 'Theme', settings.theme || 'system', [
+        { value: 'dark', label: 'Dark' },
+        { value: 'light', label: 'Light' },
+        { value: 'system', label: 'Follow system' },
+      ]) +
+      buildToggle('setting-pin', 'Always on top', isPinned) +
+      buildToggle('setting-autostart', 'Launch on startup', settings.launchOnStartup) +
+      buildStatus('Taskbar icon', taskbarStatus) +
+      buildAction('setting-minimize', 'Minimize to taskbar') +
+      buildAction('setting-hide-to-tray', 'Hide to tray') +
+    '</div>' +
+    '<div class="settings-group">' +
+      '<div class="settings-title">Mini Badge</div>' +
+      buildToggle('setting-mini-badge', 'Mini badge mode', settings.miniBadgeMode) +
+      buildSelect('setting-mini-badge-source', 'Mini badge source', settings.miniBadgeSource, [
+        { value: 'auto', label: 'Auto (max of all)' },
+        { value: 'rolling', label: 'Rolling' },
+        { value: 'weekly', label: 'Weekly' },
+        { value: 'monthly', label: 'Monthly' }
+      ]) +
+      buildSelect('setting-mini-badge-display', 'Badge display', settings.miniBadgeDisplay || 'percent', [
+        { value: 'percent', label: 'Percent' },
+        { value: 'ring', label: 'Ring' },
+        { value: 'dot', label: 'Dot' },
+      ]) +
+    '</div>' +
+    '<div class="settings-group">' +
+      '<div class="settings-title">Refresh Tuning</div>' +
+      buildToggle('setting-compact', 'Compact layout', settings.compactMode) +
+      buildSelect('setting-refresh-visible', 'Visible refresh', String(settings.refreshVisibleSecs || 30), [
+        { value: '15', label: '15s' }, { value: '30', label: '30s' },
+        { value: '60', label: '60s' }, { value: '300', label: '5m' },
+      ]) +
+      buildSelect('setting-refresh-hidden', 'Hidden refresh', String(settings.refreshHiddenSecs || 600), [
+        { value: '300', label: '5m' }, { value: '600', label: '10m' },
+        { value: '1800', label: '30m' }, { value: '0', label: 'Off' },
+      ]) +
+      buildAction('setting-clear-cache', 'Clear cache') +
+    '</div>' +
+    '<div class="settings-group">' +
+      '<div class="settings-title">Notifications</div>' +
+      buildToggle('setting-notify-quota', 'Quota alerts', settings.notifyQuota !== false) +
+      buildToggle('setting-notify-budget', 'Budget exceeded', settings.notifyBudgetProjection !== false) +
+      buildToggle('setting-notify-refresh-failure', 'Refresh failures', settings.notifyRefreshFailure !== false) +
+      buildToggle('setting-quiet-hours', 'Quiet hours (22:00-08:00)', settings.quietHoursEnabled) +
+      buildAction('setting-test-notification', 'Test notification') +
+    '</div>' +
+    '<div class="settings-group">' +
+      '<div class="settings-title">Accounts</div>' +
+      buildAccountsListHtml(accounts, settings) +
+      buildAction('setting-add-account', 'Add account') +
+      (isAccountInlineAction(inlineAction) ? buildInlineAccountAction(inlineAction) : '') +
+    '</div>' +
     '<div class="settings-group">' +
       '<div class="settings-title">Hotkey</div>' +
       buildStatus('Current', escapeHtml(settings.hotkeyRecording ? 'Press shortcut...' : (settings.hotkey || 'Ctrl+Shift+U'))) +
@@ -33,70 +93,40 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
     '<div class="settings-group">' +
       '<div class="settings-title">Updates</div>' +
       buildToggle('setting-auto-update', 'Auto check updates', settings.autoUpdate !== false) +
-      buildAction('setting-check-update', 'Check for updates now') +
+      buildAction('setting-check-update', updateActionLabel) +
     '</div>' +
     '<div class="settings-group">' +
       '<div class="settings-title">Local Data & Health</div>' +
       buildToggle('setting-auto-backup', 'Auto backup (daily, keep 7)', settings.autoBackup !== false) +
       '<div class="settings-diagnostics">' +
         buildLocalDataStatus(localDataStatus) +
-        buildHealthCheckStatus(effectiveHealthCheck, snapshot) +
+        buildHealthCheckBrowser(effectiveHealthCheck, snapshot, healthCheckOpen) +
+        buildBackupBrowser(localBackups, localBackupsOpen, localDataStatus?.backupCount, localBackupsLoaded) +
         '<div class="settings-diagnostic-actions">' +
           buildAction('setting-refresh-local-data', 'Refresh data status', !!actions?.refreshLocalDataStatus, 'settings-diagnostic-action') +
           buildAction('setting-run-health-check', 'Run health check', !!actions?.runHealthCheck, 'settings-diagnostic-action') +
+          buildAction('setting-refresh-backups', 'Refresh backups', !!actions?.refreshLocalBackups, 'settings-diagnostic-action') +
           buildAction('setting-open-exports', 'Open exports folder', true, 'settings-diagnostic-action') +
           buildAction('setting-backup', 'Backup settings/history', true, 'settings-diagnostic-action') +
-          buildAction('setting-restore', 'Restore backup JSON', true, 'settings-diagnostic-action danger') +
+          buildAction('setting-restore', 'Restore JSON file', true, 'settings-diagnostic-action danger') +
           buildAction('setting-export-json', 'Export snapshot JSON', true, 'settings-diagnostic-action') +
           buildAction('setting-export-records', 'Export usage CSV', true, 'settings-diagnostic-action') +
           buildAction('setting-export-costs', 'Export costs CSV', true, 'settings-diagnostic-action') +
+          buildAction('setting-clear-cache-data', 'Clear cache', true, 'settings-diagnostic-action danger') +
+          buildAction('setting-clear-auth-data', 'Clear login', true, 'settings-diagnostic-action danger') +
           buildAction('setting-clear-exports', 'Clear exports', true, 'settings-diagnostic-action danger') +
           buildAction('setting-clear-history', 'Clear history', true, 'settings-diagnostic-action danger') +
         '</div>' +
         (inlineAction?.kind === 'clear-local-data' ? buildInlineConfirm(inlineAction, 'Clear ' + inlineAction.scope + ' data?') : '') +
+        (inlineAction?.kind === 'restore-local-data' ? buildRestoreConfirm(inlineAction) : '') +
       '</div>' +
     '</div>';
 
   container.innerHTML =
     '<div class="settings-group">' +
-      '<div class="settings-title">Window</div>' +
-      buildSelect('setting-theme', 'Theme', settings.theme || 'system', [
-        { value: 'dark', label: 'Dark' },
-        { value: 'light', label: 'Light' },
-        { value: 'system', label: 'Follow system' },
-      ]) +
-      buildToggle('setting-pin', 'Always on top', isPinned) +
-      buildToggle('setting-autostart', 'Launch on startup', settings.launchOnStartup) +
-      buildToggle('setting-mini-badge', 'Mini badge mode', settings.miniBadgeMode) +
-      buildSelect('setting-mini-badge-source', 'Mini badge source', settings.miniBadgeSource, [
-        { value: 'auto', label: 'Auto (max of all)' },
-        { value: 'rolling', label: 'Rolling' },
-        { value: 'weekly', label: 'Weekly' },
-        { value: 'monthly', label: 'Monthly' }
-      ]) +
-      buildSelect('setting-mini-badge-display', 'Badge display', settings.miniBadgeDisplay || 'percent', [
-        { value: 'percent', label: 'Percent' },
-        { value: 'ring', label: 'Ring' },
-        { value: 'dot', label: 'Dot' },
-      ]) +
-      buildStatus('Taskbar icon', taskbarStatus) +
-      buildAction('setting-minimize', 'Minimize to taskbar') +
-      buildAction('setting-hide-to-tray', 'Hide to tray') +
-    '</div>' +
-    '<div class="settings-group">' +
       '<div class="settings-title">Refresh</div>' +
       buildToggle('setting-auto-refresh', 'Auto refresh', settings.autoRefresh) +
-      buildToggle('setting-compact', 'Compact layout', settings.compactMode) +
-      buildSelect('setting-refresh-visible', 'Visible refresh', String(settings.refreshVisibleSecs || 30), [
-        { value: '15', label: '15s' }, { value: '30', label: '30s' },
-        { value: '60', label: '60s' }, { value: '300', label: '5m' },
-      ]) +
-      buildSelect('setting-refresh-hidden', 'Hidden refresh', String(settings.refreshHiddenSecs || 600), [
-        { value: '300', label: '5m' }, { value: '600', label: '10m' },
-        { value: '1800', label: '30m' }, { value: '0', label: 'Off' },
-      ]) +
       buildAction('setting-refresh', 'Refresh now') +
-      buildAction('setting-clear-cache', 'Clear cache') +
     '</div>' +
     '<div class="settings-group">' +
       '<div class="settings-title">Budget</div>' +
@@ -105,20 +135,6 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
     '<div class="settings-group">' +
       '<div class="settings-title">Alerts</div>' +
       buildInput('setting-threshold', 'Usage threshold (%, 0=off)', settings.usageThreshold || 0, 'number', '50-95 or 0') +
-    '</div>' +
-    '<div class="settings-group">' +
-      '<div class="settings-title">Notifications</div>' +
-      buildToggle('setting-notify-quota', 'Quota alerts', settings.notifyQuota !== false) +
-      buildToggle('setting-notify-budget', 'Budget exceeded', settings.notifyBudgetProjection !== false) +
-      buildToggle('setting-notify-refresh-failure', 'Refresh failures', settings.notifyRefreshFailure !== false) +
-      buildToggle('setting-quiet-hours', 'Quiet hours (22:00-08:00)', settings.quietHoursEnabled) +
-      buildAction('setting-test-notification', 'Test notification') +
-    '</div>' +
-    '<div class="settings-group">' +
-      '<div class="settings-title">Accounts</div>' +
-      buildAccountsListHtml(accounts, settings) +
-      buildAction('setting-add-account', 'Add account') +
-      (isAccountInlineAction(inlineAction) ? buildInlineAccountAction(inlineAction) : '') +
     '</div>' +
     '<div class="settings-group">' +
       '<div class="settings-title">Account</div>' +
@@ -159,9 +175,14 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
   bindAction('setting-export-costs', () => actions.exportData('daily-costs-csv'));
   bindAction('setting-refresh-local-data', actions?.refreshLocalDataStatus);
   bindAction('setting-run-health-check', actions?.runHealthCheck);
+  bindAction('setting-health-check-toggle', actions?.toggleHealthCheck);
+  bindAction('setting-backups-toggle', actions?.toggleLocalBackups);
+  bindAction('setting-refresh-backups', actions?.refreshLocalBackups);
   bindAction('setting-open-exports', actions.openExportsFolder);
   bindAction('setting-backup', actions.backupLocalData);
   bindAction('setting-restore', actions.restoreLocalData);
+  bindAction('setting-clear-cache-data', () => actions.clearLocalData('cache'));
+  bindAction('setting-clear-auth-data', () => actions.clearLocalData('login'));
   bindAction('setting-clear-exports', () => actions.clearLocalData('exports'));
   bindAction('setting-clear-history', () => actions.clearLocalData('history'));
   bindAction('setting-rename-workspace', actions.renameWorkspace);
@@ -175,6 +196,9 @@ export function renderSettingsTab(snapshot, settings, actions, isPinned, localDa
   bindToggle('setting-auto-backup', (value) => actions.setAutoBackup(value));
   bindToggle('setting-auto-update', (value) => actions.setAutoUpdate(value));
   bindAction('setting-check-update', actions.checkForUpdate);
+  localBackups.forEach((backup, index) => {
+    bindAction('setting-restore-backup-' + index, () => actions.restoreListedBackup(backup.id));
+  });
   bindAction('setting-add-account', actions.addAccount);
   for (const account of accounts || []) {
     bindAction('setting-rename-account-' + account.id, () => actions.renameAccount(account.id, account.displayName));
@@ -205,9 +229,10 @@ function buildToggle(id, label, checked) {
  * The toggle button is always rendered; the body is only rendered when open,
  * so closed sections avoid creating bindings for their inner controls.
  */
-function buildCollapsibleSection(id, title, open, bodyHtml) {
-  return '<div class="settings-collapsible' + (open ? ' open' : '') + '">' +
-    '<button id="' + id + '-toggle" type="button" class="settings-collapsible-toggle' + (open ? ' active' : '') + '">' +
+function buildCollapsibleSection(id, title, open, bodyHtml, className = '') {
+  const extraClass = className ? ' ' + className : '';
+  return '<div class="settings-collapsible' + extraClass + (open ? ' open' : '') + '">' +
+    '<button id="' + id + '-toggle" type="button" class="settings-collapsible-toggle' + extraClass + (open ? ' active' : '') + '">' +
       '<span class="settings-collapsible-arrow">' + (open ? '&#x25BC;' : '&#x25B6;') + '</span>' +
       '<span>' + escapeHtml(title) + '</span>' +
     '</button>' +
@@ -216,6 +241,81 @@ function buildCollapsibleSection(id, title, open, bodyHtml) {
 }
 function buildStatus(label, value) {
   return '<div class="setting-row"><span>' + escapeHtml(label) + '</span><strong>' + value + '</strong></div>';
+}
+function buildHealthCheckBrowser(health, snapshot, open) {
+  const state = healthCheckState(health, snapshot);
+  return buildCollapsibleSection(
+    'setting-health-check',
+    'Health check (' + healthCheckSummary(health, snapshot) + ')',
+    open,
+    buildHealthCheckStatus(health, snapshot),
+    'health-' + state
+  );
+}
+function buildBackupBrowser(backups, open, statusBackupCount, loaded) {
+  const list = Array.isArray(backups) ? backups : [];
+  const count = loaded
+    ? list.length
+    : (Number.isFinite(statusBackupCount) ? statusBackupCount : list.length);
+  if (list.length === 0) {
+    return buildCollapsibleSection(
+      'setting-backups',
+      'Backups (' + count + ')',
+      open,
+      '<div class="settings-backup-list empty">No backups found</div>'
+    );
+  }
+  const rows = list.map((backup, index) => {
+    const created = formatBackupDate(backup.createdAt || backup.modifiedAt);
+    const meta = [
+      backup.source || 'Backup',
+      created,
+      (backup.historyEntries || 0) + ' history',
+      backup.workspaceId || 'no workspace',
+    ].filter(Boolean).join(' - ');
+    return '<div class="settings-backup-row">' +
+      '<div class="settings-backup-main">' +
+        '<span class="settings-backup-name">' + escapeHtml(backup.fileName || backup.id || 'backup.json') + '</span>' +
+        '<span class="settings-backup-meta">' + escapeHtml(meta) + '</span>' +
+      '</div>' +
+      buildAction('setting-restore-backup-' + index, 'Restore', true, 'settings-backup-action danger') +
+    '</div>';
+  }).join('');
+  return buildCollapsibleSection(
+    'setting-backups',
+    'Backups (' + count + ')',
+    open,
+    '<div class="settings-backup-list">' + rows + '</div>'
+  );
+}
+function healthCheckSummary(health, snapshot) {
+  if (!health) {
+    const lastError = snapshot?.refresh_state?.last_error || snapshot?.error || '';
+    return lastError ? 'Check needed' : 'Not run';
+  }
+  const checks = [
+    health.hasAuth,
+    health.cacheOk,
+    health.settingsOk,
+    health.historyOk,
+    health.dataDirAvailable,
+  ];
+  const failed = checks.filter(value => value === false).length;
+  return failed === 0 ? 'OK' : failed + ' issue' + (failed === 1 ? '' : 's');
+}
+function healthCheckState(health, snapshot) {
+  if (!health) {
+    const lastError = snapshot?.refresh_state?.last_error || snapshot?.error || '';
+    return lastError ? 'warning' : 'unknown';
+  }
+  const checks = [
+    health.hasAuth,
+    health.cacheOk,
+    health.settingsOk,
+    health.historyOk,
+    health.dataDirAvailable,
+  ];
+  return checks.some(value => value === false) ? 'warning' : 'ok';
 }
 function buildAccountsListHtml(accounts, settings) {
   const list = accounts || [];
@@ -259,11 +359,29 @@ function buildInlineInput(action, label, placeholder) {
   '</div>';
 }
 function buildInlineConfirm(action, message) {
-  const confirmText = action.kind === 'remove-account' ? 'Remove' : 'Clear';
+  const confirmText = action.kind === 'remove-account' ? 'Remove' : action.kind === 'restore-local-data' ? 'Restore' : 'Clear';
   return '<div class="settings-inline-action danger" data-kind="' + escapeHtml(action?.kind || '') + '">' +
     '<div class="settings-inline-message">' + escapeHtml(message) + '</div>' +
     '<div class="settings-inline-buttons">' +
       '<button id="settings-inline-submit" type="button" class="settings-inline-btn danger">' + escapeHtml(confirmText) + '</button>' +
+      '<button id="settings-inline-cancel" type="button" class="settings-inline-btn">Cancel</button>' +
+    '</div>' +
+  '</div>';
+}
+function buildRestoreConfirm(action) {
+  const preview = action.preview || {};
+  const details = [
+    'Version ' + (preview.version || '?'),
+    (preview.historyEntries || 0) + ' history entries',
+    'workspace ' + (preview.workspaceId || 'not set'),
+    'account ' + (preview.activeAccountId || 'default'),
+  ];
+  if (preview.createdAt) details.unshift(formatBackupDate(preview.createdAt));
+  return '<div class="settings-inline-action danger" data-kind="restore-local-data">' +
+    '<div class="settings-inline-message">Restore this backup and replace current settings, history, and cache?</div>' +
+    '<div class="settings-restore-preview">' + escapeHtml(details.join(' - ')) + '</div>' +
+    '<div class="settings-inline-buttons">' +
+      '<button id="settings-inline-submit" type="button" class="settings-inline-btn danger">Restore</button>' +
       '<button id="settings-inline-cancel" type="button" class="settings-inline-btn">Cancel</button>' +
     '</div>' +
   '</div>';
@@ -345,4 +463,15 @@ function nextNumberValue(id, raw, dir) {
     return String(current <= 50 ? 0 : current - 1);
   }
   return Math.max(0, current + (up ? 1 : -1)).toFixed(2);
+}
+function formatBackupDate(value) {
+  if (!value) return 'unknown date';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }

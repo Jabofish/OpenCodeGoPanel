@@ -29,10 +29,26 @@ pub struct RestoreLocalDataResult {
     pub workspace_id: String,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalBackupSummary {
+    pub id: String,
+    pub file_name: String,
+    pub source: String,
+    pub bytes: u64,
+    pub modified_at: Option<String>,
+    pub created_at: Option<String>,
+    pub version: u32,
+    pub active_account_id: String,
+    pub workspace_id: String,
+    pub history_entries: usize,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LocalDataBackup {
     version: u32,
+    created_at: Option<String>,
     settings: AppSettings,
     history: Vec<HistoryEntry>,
     cache: AppDataSnapshot,
@@ -78,6 +94,14 @@ pub(crate) fn restore_local_data(
         history_entries,
         workspace_id,
     })
+}
+
+pub(crate) fn list_local_backups() -> Result<Vec<LocalBackupSummary>, String> {
+    list_local_backups_in(&data_dir())
+}
+
+pub(crate) fn read_local_backup(id: &str) -> Result<String, String> {
+    read_local_backup_in(&data_dir(), id)
 }
 
 pub(crate) fn open_exports_folder() -> Result<String, String> {
@@ -321,6 +345,102 @@ fn parse_backup_json(backup_json: &str) -> Result<LocalDataBackup, String> {
         return Err(format!("Unsupported backup version: {}", backup.version));
     }
     Ok(backup)
+}
+
+fn list_local_backups_in(data_dir: &Path) -> Result<Vec<LocalBackupSummary>, String> {
+    let mut backups = Vec::new();
+    collect_backup_summaries(data_dir, BACKUPS_DIR, "Auto", &mut backups)?;
+    collect_backup_summaries(data_dir, EXPORTS_DIR, "Manual", &mut backups)?;
+    backups.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| b.modified_at.cmp(&a.modified_at))
+            .then_with(|| b.file_name.cmp(&a.file_name))
+    });
+    Ok(backups)
+}
+
+fn collect_backup_summaries(
+    data_dir: &Path,
+    relative_dir: &str,
+    source: &str,
+    backups: &mut Vec<LocalBackupSummary>,
+) -> Result<(), String> {
+    let dir = data_dir.join(relative_dir);
+    if !dir.exists() {
+        return Ok(());
+    }
+
+    for entry in std::fs::read_dir(&dir).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if !metadata.is_file() || path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if relative_dir == EXPORTS_DIR && !file_name.starts_with("opencode-backup-") {
+            continue;
+        }
+
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(backup) = parse_backup_json(&content) else {
+            continue;
+        };
+
+        let modified_at = metadata
+            .modified()
+            .ok()
+            .map(chrono::DateTime::<Utc>::from)
+            .map(|dt| dt.to_rfc3339());
+
+        backups.push(LocalBackupSummary {
+            id: format!("{}/{}", relative_dir, file_name),
+            file_name,
+            source: source.to_string(),
+            bytes: metadata.len(),
+            modified_at,
+            created_at: backup.created_at,
+            version: backup.version,
+            active_account_id: backup.settings.active_account_id,
+            workspace_id: backup.cache.workspace_id,
+            history_entries: backup.history.len(),
+        });
+    }
+
+    Ok(())
+}
+
+fn resolve_backup_id(data_dir: &Path, id: &str) -> Result<PathBuf, String> {
+    let (relative_dir, file_name) = id
+        .split_once('/')
+        .ok_or_else(|| "Invalid backup id".to_string())?;
+    if !matches!(relative_dir, BACKUPS_DIR | EXPORTS_DIR) {
+        return Err("Invalid backup source".to_string());
+    }
+    if file_name.contains('/') || file_name.contains('\\') || file_name == "." || file_name == ".."
+    {
+        return Err("Invalid backup file name".to_string());
+    }
+
+    let path = data_dir.join(relative_dir).join(file_name);
+    if !path.is_file() {
+        return Err("Backup not found".to_string());
+    }
+    Ok(path)
+}
+
+fn read_local_backup_in(data_dir: &Path, id: &str) -> Result<String, String> {
+    let path = resolve_backup_id(data_dir, id)?;
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("Failed to read backup: {}", e))?;
+    parse_backup_json(&content)?;
+    Ok(content)
 }
 
 fn clear_local_data_in(data_dir: &Path, scope: &str) -> Result<ClearLocalDataEffect, String> {
@@ -816,6 +936,74 @@ mod tests {
 
         assert_eq!(status.backup_bytes, 15);
         assert_eq!(status.backup_count, 2);
+
+        std::fs::remove_dir_all(&dir).expect("remove temp test directory");
+    }
+
+    #[test]
+    fn list_local_backups_includes_auto_and_manual_backups() {
+        let dir = unique_temp_path("list-backups");
+        let backups = dir.join(BACKUPS_DIR);
+        let exports = dir.join(EXPORTS_DIR);
+        std::fs::create_dir_all(&backups).expect("create backups directory");
+        std::fs::create_dir_all(&exports).expect("create exports directory");
+
+        let mut cache = AppDataSnapshot::empty();
+        cache.workspace_id = "ws-list".into();
+        let backup = serde_json::json!({
+            "version": 1,
+            "createdAt": "2026-01-02T03:04:05Z",
+            "settings": AppSettings::default(),
+            "history": [],
+            "cache": cache,
+            "auth": null,
+        });
+        let content = serde_json::to_string_pretty(&backup).expect("serialize backup");
+        std::fs::write(backups.join("auto-backup-20260102.json"), &content)
+            .expect("write auto backup");
+        std::fs::write(
+            exports.join("opencode-backup-20260102-030405.json"),
+            &content,
+        )
+        .expect("write manual backup");
+        std::fs::write(exports.join("opencode-snapshot-ignored.json"), &content)
+            .expect("write non-backup export");
+
+        let listed = list_local_backups_in(&dir).expect("list backups");
+
+        assert_eq!(listed.len(), 2);
+        assert!(listed.iter().any(|b| b.source == "Auto"));
+        assert!(listed.iter().any(|b| b.source == "Manual"));
+        assert!(listed.iter().all(|b| b.workspace_id == "ws-list"));
+
+        std::fs::remove_dir_all(&dir).expect("remove temp test directory");
+    }
+
+    #[test]
+    fn read_local_backup_resolves_known_backup_id() {
+        let dir = unique_temp_path("read-backup");
+        let backups = dir.join(BACKUPS_DIR);
+        std::fs::create_dir_all(&backups).expect("create backups directory");
+        let backup = serde_json::json!({
+            "version": 1,
+            "createdAt": "2026-01-02T03:04:05Z",
+            "settings": AppSettings::default(),
+            "history": [],
+            "cache": AppDataSnapshot::empty(),
+            "auth": null,
+        });
+        let expected = serde_json::to_string(&backup).expect("serialize backup");
+        std::fs::write(backups.join("auto-backup-20260102.json"), &expected).expect("write backup");
+
+        let content =
+            read_local_backup_in(&dir, "backups/auto-backup-20260102.json").expect("read backup");
+
+        assert_eq!(content, expected);
+        assert!(resolve_backup_id(&dir, "../auto-backup-20260102.json").is_err());
+
+        std::fs::write(backups.join("not-a-backup.json"), br#"{"version":2}"#)
+            .expect("write invalid backup");
+        assert!(read_local_backup_in(&dir, "backups/not-a-backup.json").is_err());
 
         std::fs::remove_dir_all(&dir).expect("remove temp test directory");
     }

@@ -128,6 +128,8 @@ pub fn run() {
             commands::get_local_data_status,
             commands::backup_local_data,
             commands::restore_local_data,
+            commands::list_local_backups,
+            commands::read_local_backup,
             commands::clear_local_data,
             commands::open_exports_folder,
             commands::run_health_check,

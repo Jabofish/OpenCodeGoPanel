@@ -2,7 +2,7 @@ use crate::auth::AuthStore;
 use crate::cache::AppCache;
 use crate::client::OpenCodeClient;
 use crate::history::HistoryStore;
-use crate::models::{AppDataSnapshot, UsageRecord};
+use crate::models::{AppDataSnapshot, RefreshState, UsageRecord};
 use crate::notification_rules::{self, NotificationRuleState, ThresholdNotificationState};
 use crate::settings_store::SettingsStore;
 use chrono::Utc;
@@ -350,6 +350,9 @@ impl RefreshScheduler {
         let spawn_skip_notifications = ctx.skip_notifications.load(Ordering::Relaxed);
 
         tokio::spawn(async move {
+            let mut slow_errors = Vec::new();
+            let mut auth_expired = false;
+
             let records = Self::refresh_usage_records_incremental(
                 records_client,
                 records_cache.clone(),
@@ -359,6 +362,8 @@ impl RefreshScheduler {
             .await;
 
             if let Err(e) = records {
+                auth_expired = Self::is_auth_error(&e);
+                slow_errors.push(Self::labeled_refresh_error("usage records", &e));
                 Self::handle_fetch_error(
                     &records_cache,
                     &costs_auth,
@@ -368,24 +373,28 @@ impl RefreshScheduler {
                 );
             }
 
-            records_cache.update_refresh_state(|rs| rs.phase = "costs".into());
+            if !auth_expired {
+                records_cache.update_refresh_state(|rs| rs.phase = "costs".into());
 
-            let costs = Self::refresh_monthly_costs(
-                costs_client,
-                costs_cache.clone(),
-                costs_cookies,
-                costs_workspace_id,
-            )
-            .await;
+                let costs = Self::refresh_monthly_costs(
+                    costs_client,
+                    costs_cache.clone(),
+                    costs_cookies,
+                    costs_workspace_id,
+                )
+                .await;
 
-            if let Err(e) = costs {
-                Self::handle_fetch_error(
-                    &costs_cache,
-                    &costs_auth,
-                    e,
-                    "monthly costs",
-                    &spawn_app_handle,
-                );
+                if let Err(e) = costs {
+                    auth_expired = Self::is_auth_error(&e);
+                    slow_errors.push(Self::labeled_refresh_error("monthly costs", &e));
+                    Self::handle_fetch_error(
+                        &costs_cache,
+                        &costs_auth,
+                        e,
+                        "monthly costs",
+                        &spawn_app_handle,
+                    );
+                }
             }
 
             println!("[Refresh] slow data complete");
@@ -540,17 +549,25 @@ impl RefreshScheduler {
                     }
                 }
             }
+            let slow_error = if slow_errors.is_empty() {
+                None
+            } else {
+                Some(slow_errors.join("; "))
+            };
             records_cache.update_refresh_state(|rs| {
-                rs.is_refreshing = false;
-                rs.phase = "done".into();
-                rs.last_finished_at = Some(Utc::now().to_rfc3339());
+                Self::finish_refresh_state(rs, slow_error.clone());
             });
             ctx.is_refreshing.store(false, Ordering::Release);
             if let Some(ref handle) = spawn_app_handle {
-                let _ = handle.emit(
-                    "refresh-complete",
-                    serde_json::json!({ "status": "complete" }),
-                );
+                let payload = match slow_error {
+                    Some(error) => serde_json::json!({
+                        "status": "error",
+                        "reason": if auth_expired { "auth_expired" } else { "slow_data_failed" },
+                        "error": error,
+                    }),
+                    None => serde_json::json!({ "status": "complete" }),
+                };
+                let _ = handle.emit("refresh-complete", payload);
             }
         });
 
@@ -718,7 +735,7 @@ impl RefreshScheduler {
         label: &str,
         app_handle: &Option<tauri::AppHandle>,
     ) {
-        if error == "AUTH_EXPIRED" || error == "REDIRECT_TO_LOGIN" {
+        if Self::is_auth_error(&error) {
             println!("[Refresh] Auth expired ({}), clearing cookies", label);
             auth_store.clear_cookies().ok();
             cache.set_error("Session expired. Please log in again.".into());
@@ -735,6 +752,30 @@ impl RefreshScheduler {
                     snapshot.error = Some(error);
                 }
             });
+        }
+    }
+
+    fn is_auth_error(error: &str) -> bool {
+        error == "AUTH_EXPIRED" || error == "REDIRECT_TO_LOGIN"
+    }
+
+    fn labeled_refresh_error(label: &str, error: &str) -> String {
+        let message = if Self::is_auth_error(error) {
+            "Session expired. Please log in again."
+        } else {
+            error
+        };
+        format!("{}: {}", label, message)
+    }
+
+    fn finish_refresh_state(rs: &mut RefreshState, slow_error: Option<String>) {
+        rs.is_refreshing = false;
+        rs.last_finished_at = Some(Utc::now().to_rfc3339());
+        if let Some(error) = slow_error {
+            rs.phase = "error".into();
+            rs.last_error = Some(error);
+        } else {
+            rs.phase = "done".into();
         }
     }
 
@@ -879,5 +920,50 @@ mod tests {
         assert_eq!(base.saturating_mul(calculate_backoff(0)), 30);
         assert_eq!(base.saturating_mul(calculate_backoff(3)), 60);
         assert_eq!(base.saturating_mul(calculate_backoff(8)), 1920);
+    }
+
+    #[test]
+    fn slow_refresh_error_finishes_as_error_state() {
+        let mut state = RefreshState {
+            is_refreshing: true,
+            phase: "costs".into(),
+            last_started_at: Some("start".into()),
+            last_finished_at: None,
+            last_error: None,
+        };
+
+        RefreshScheduler::finish_refresh_state(&mut state, Some("monthly costs: timeout".into()));
+
+        assert!(!state.is_refreshing);
+        assert_eq!(state.phase, "error");
+        assert_eq!(state.last_error.as_deref(), Some("monthly costs: timeout"));
+        assert!(state.last_finished_at.is_some());
+    }
+
+    #[test]
+    fn successful_slow_refresh_finishes_as_done_state() {
+        let mut state = RefreshState {
+            is_refreshing: true,
+            phase: "costs".into(),
+            last_started_at: Some("start".into()),
+            last_finished_at: None,
+            last_error: None,
+        };
+
+        RefreshScheduler::finish_refresh_state(&mut state, None);
+
+        assert!(!state.is_refreshing);
+        assert_eq!(state.phase, "done");
+        assert!(state.last_error.is_none());
+        assert!(state.last_finished_at.is_some());
+    }
+
+    #[test]
+    fn auth_errors_use_user_facing_refresh_message() {
+        assert!(RefreshScheduler::is_auth_error("AUTH_EXPIRED"));
+        assert_eq!(
+            RefreshScheduler::labeled_refresh_error("usage records", "AUTH_EXPIRED"),
+            "usage records: Session expired. Please log in again."
+        );
     }
 }

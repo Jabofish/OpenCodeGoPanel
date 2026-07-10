@@ -89,16 +89,6 @@ export function renderUsageTab(snapshot, settings, insights) {
       .reduce((sum, c) => sum + (c.totalCost || 0), 0);
     const totalSpentDollars = monthCostUnits / OPENCODE_COST_UNITS_PER_USD;
 
-    // Debug logging
-    console.log('[Usage] Budget calc:', {
-      nowY, nowM, monthPrefix,
-      dailyCostsCount: dailyCosts.length,
-      filteredCount: monthCosts.length,
-      monthCostUnits,
-      totalSpentDollars: totalSpentDollars.toFixed(4),
-      budget: (budget / 100).toFixed(2),
-    });
-
     const budgetDollarsValue = budget / 100;
     const pct = Math.round((totalSpentDollars / budgetDollarsValue) * 100);
     const spentDollars = totalSpentDollars.toFixed(4);

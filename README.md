@@ -22,8 +22,20 @@ Requires [Node.js](https://nodejs.org/) and [Rust](https://www.rust-lang.org/).
 npm install            # install frontend dependencies
 npm run tauri dev      # run the app in development
 npm run tauri build    # build a Windows installer
+npm run fmt:rust       # check Rust formatting
+npm run lint:rust      # run Rust Clippy lints
+npm run check:rust     # run Rust format, lint, and tests
 npm run test:rust      # run the Rust unit tests
 ```
+
+## Release 0.3.0-beta.1
+
+- **Backup browser and restore:** Local Data & Health now lists automatic and manual backups with timestamps, source, workspace, history-entry count, and an inline restore confirmation. Backup counts remain accurate while the browser is collapsed.
+- **Health diagnostics:** The health check can be collapsed independently and keeps a prominent green OK state when all checks pass.
+- **Refresh resilience:** Slow records and cost refresh failures now finish with an explicit error state and diagnostic detail. Frontend snapshot polling is serialized so slow IPC calls cannot overlap and display stale state.
+- **Settings organization:** Less-frequent window, notification, account, report, update, and maintenance controls are grouped under Advanced settings to keep common actions compact.
+- **Update readiness:** A downloaded update stays available from Settings until the user explicitly chooses Install & Restart.
+- **Quality gates:** Added repository EditorConfig rules plus `npm run fmt:rust`, `npm run lint:rust`, and `npm run check:rust` for local validation.
 
 ## Release 0.2.0
 

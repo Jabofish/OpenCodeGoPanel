@@ -1020,6 +1020,16 @@ pub async fn restore_local_data(
 }
 
 #[tauri::command]
+pub async fn list_local_backups() -> Result<Vec<maintenance::LocalBackupSummary>, String> {
+    maintenance::list_local_backups()
+}
+
+#[tauri::command]
+pub async fn read_local_backup(backup_id: String) -> Result<String, String> {
+    maintenance::read_local_backup(&backup_id)
+}
+
+#[tauri::command]
 pub async fn clear_local_data(
     cache: tauri::State<'_, Arc<AppCache>>,
     history: tauri::State<'_, Arc<HistoryStore>>,
@@ -1285,6 +1295,8 @@ mod tests {
             "get_local_data_status",
             "backup_local_data",
             "restore_local_data",
+            "list_local_backups",
+            "read_local_backup",
             "clear_local_data",
             "open_exports_folder",
             "run_health_check",

@@ -12,6 +12,8 @@ let currentDialogVersion = '';
 let pendingUpdateInfo = null;
 let checkingToastId = null;
 let updateOverlayActive = false;
+let downloadedUpdateReady = false;
+let downloadedUpdateVersion = '';
 
 // Download dialog state — tracks whether the progress dialog DOM has been
 // built so subsequent progress events patch in-place instead of rebuilding.
@@ -38,6 +40,8 @@ export function initUpdater() {
         break;
       case 'available':
         if (checkingToastId) { dismissToast(checkingToastId); checkingToastId = null; }
+        downloadedUpdateReady = false;
+        downloadedUpdateVersion = '';
         if (!canShowInlineUI()) {
           // Badge is collapsed (tiny window): defer dialog until user expands
           pendingUpdateInfo = payload.info;
@@ -52,6 +56,8 @@ export function initUpdater() {
         // The downloaded event is the single source of truth for the
         // install-ready transition. startDownload() no longer calls
         // showInstallReady() directly, so there is no double-render.
+        downloadedUpdateReady = true;
+        downloadedUpdateVersion = currentDialogVersion || pendingUpdateInfo?.version || '';
         downloadDialogBuilt = false;
         if (canShowInlineUI()) showInstallReady();
         break;
@@ -81,6 +87,11 @@ export function initUpdater() {
  * Manually trigger an update check (from Settings UI).
  */
 export async function checkForUpdateManually() {
+  if (downloadedUpdateReady) {
+    showInstallReady();
+    return;
+  }
+
   try {
     const info = await invoke('check_for_update');
     if (!info) {
@@ -92,6 +103,16 @@ export async function checkForUpdateManually() {
   } catch (_e) {
     // Error toast is already shown by the event listener — no duplicate here
   }
+}
+
+export function hasDownloadedUpdateReady() {
+  return downloadedUpdateReady;
+}
+
+export function showDownloadedUpdateReady() {
+  if (!downloadedUpdateReady) return false;
+  showInstallReady();
+  return true;
 }
 
 function showUpdateDialog(info) {
@@ -196,8 +217,14 @@ function showDownloadProgress(progress, total) {
 }
 
 function showInstallReady() {
-  const overlay = document.getElementById('update-overlay');
-  if (!overlay) return;
+  let overlay = document.getElementById('update-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'update-overlay';
+    document.body.appendChild(overlay);
+  }
+
+  const versionText = downloadedUpdateVersion ? ' v' + downloadedUpdateVersion : '';
 
   overlay.innerHTML = '' +
     '<div class="update-dialog">' +
@@ -206,7 +233,7 @@ function showInstallReady() {
         '<span>Update Ready</span>' +
       '</div>' +
       '<div class="update-dialog-body">' +
-        '<div class="update-notes">Download complete. The app will restart to install the update.</div>' +
+        '<div class="update-notes">Download complete' + escapeHtml(versionText) + '. The app will restart to install the update.</div>' +
       '</div>' +
       '<div class="update-dialog-actions">' +
         '<button id="update-btn-install" class="update-btn update-btn-primary">Install &amp; Restart</button>' +
@@ -226,7 +253,7 @@ function hideDialog() {
   if (overlay) {
     overlay.classList.remove('visible');
   }
-  currentDialogVersion = '';
+  if (!downloadedUpdateReady) currentDialogVersion = '';
   updateOverlayActive = false;
 }
 
@@ -244,6 +271,8 @@ async function startDownload() {
     // removes the double-render that previously occurred when both the event
     // handler and this function called showInstallReady().
   } catch (e) {
+    downloadedUpdateReady = false;
+    downloadedUpdateVersion = '';
     downloadDialogBuilt = false;
     hideDialog();
     if (typeof showToast === 'function') {
@@ -255,6 +284,8 @@ async function startDownload() {
 async function installUpdate() {
   try {
     await invoke('install_update');
+    downloadedUpdateReady = false;
+    downloadedUpdateVersion = '';
     // App will restart — no further action needed
   } catch (e) {
     hideDialog();

@@ -51,6 +51,8 @@
     "allow-get-local-data-status",
     "allow-backup-local-data",
     "allow-restore-local-data",
+    "allow-list-local-backups",
+    "allow-read-local-backup",
     "allow-clear-local-data",
     "allow-open-exports-folder",
     "allow-run-health-check",

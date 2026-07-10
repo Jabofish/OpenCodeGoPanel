@@ -44,16 +44,6 @@ export function deriveUsageInsights(snapshot, history, settings, now = new Date(
   const monthCostUsd = monthCostUnits / OPENCODE_COST_UNITS_PER_USD;
   const todayCostUsd = todayCostUnits / OPENCODE_COST_UNITS_PER_USD;
 
-  // Debug logging
-  console.log('[Insights] Budget calc:', {
-    nowY, nowM, dayOfMonth: now.getDate(),
-    dailyCostsCount: dailyCosts.length,
-    monthDaysCount: monthDays.size,
-    monthCostUnits,
-    monthCostUsd: monthCostUsd.toFixed(4),
-    budgetUsd: budgetUsd.toFixed(2),
-  });
-
   // Projected monthly cost
   const dayOfMonth = now.getDate();
   const daysInMonth = new Date(nowY, nowM, 0).getDate();

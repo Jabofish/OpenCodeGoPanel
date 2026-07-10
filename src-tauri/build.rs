@@ -32,6 +32,8 @@ fn main() {
             "get_local_data_status",
             "backup_local_data",
             "restore_local_data",
+            "list_local_backups",
+            "read_local_backup",
             "clear_local_data",
             "open_exports_folder",
             "run_health_check",
