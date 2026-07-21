@@ -22,11 +22,19 @@ Requires [Node.js](https://nodejs.org/) and [Rust](https://www.rust-lang.org/).
 npm install            # install frontend dependencies
 npm run tauri dev      # run the app in development
 npm run tauri build    # build a Windows installer
+npm run check          # run all frontend and Rust checks
+npm run check:js       # check frontend syntax, imports, and entry scripts
 npm run fmt:rust       # check Rust formatting
 npm run lint:rust      # run Rust Clippy lints
 npm run check:rust     # run Rust format, lint, and tests
 npm run test:rust      # run the Rust unit tests
 ```
+
+## Release 0.3.0-beta.2
+
+- **Frontend validation:** Added `npm run check:js` to validate JavaScript syntax, local module imports, and scripts referenced by the application entry page. `npm run check` now runs both frontend and Rust checks.
+- **Formatting resilience:** Countdown, relative-time, and percentage formatters now handle malformed or non-numeric input without rendering invalid values or throwing.
+- **Code cleanup:** Removed the unused legacy `derive.js` module after confirming no remaining imports.
 
 ## Release 0.3.0-beta.1
 

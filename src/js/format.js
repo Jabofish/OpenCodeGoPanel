@@ -1,19 +1,22 @@
 // Format seconds into human-readable countdown
 export function formatCountdown(seconds) {
-  if (seconds <= 0) return 'resetting...';
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = Number(seconds);
+  if (!Number.isFinite(remainingSeconds) || remainingSeconds <= 0) return 'resetting...';
+  const d = Math.floor(remainingSeconds / 86400);
+  const h = Math.floor((remainingSeconds % 86400) / 3600);
+  const m = Math.floor((remainingSeconds % 3600) / 60);
   if (d > 0) return `${d}d ${h}h`;
   if (h > 0) return `${h}h ${m}m`;
   if (m > 0) return `${m}m`;
-  return `${seconds}s`;
+  return `${remainingSeconds}s`;
 }
 
 // Format ISO timestamp to relative "X ago" string
 export function formatTimeAgo(iso) {
   if (!iso) return 'never';
-  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  const timestamp = new Date(iso).getTime();
+  if (!Number.isFinite(timestamp)) return 'unknown';
+  const diff = (Date.now() - timestamp) / 1000;
   if (diff < 10) return 'just now';
   if (diff < 60) return `${Math.floor(diff)}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
@@ -23,7 +26,8 @@ export function formatTimeAgo(iso) {
 
 // Format percentage for display (always one decimal)
 export function formatPct(value) {
-  return value.toFixed(1) + '%';
+  const percentage = Number(value);
+  return Number.isFinite(percentage) ? `${percentage.toFixed(1)}%` : '—';
 }
 
 // Escape HTML to prevent XSS
